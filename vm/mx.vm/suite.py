@@ -1,7 +1,7 @@
 suite = {
     "name": "vm",
-    "version" : "21.1.0",
-    "mxversion" : "5.287.0",
+    "version" : "21.3.0",
+    "mxversion" : "5.301.0",
     "release" : False,
     "groupId" : "org.graalvm",
 
@@ -39,7 +39,7 @@ suite = {
                 "name": "graal-nodejs",
                 "subdir": True,
                 "dynamic": True,
-                "version": "8f82eae72f0030c3f70f2f347449106156845685",
+                "version": "44b1e57bc098d20cbff273ace490d98ffc6fe33d",
                 "urls" : [
                     {"url" : "https://github.com/graalvm/graaljs.git", "kind" : "git"},
                     {"url": "https://curio.ssw.jku.at/nexus/content/repositories/snapshots", "kind": "binary"},
@@ -49,7 +49,7 @@ suite = {
                 "name": "graal-js",
                 "subdir": True,
                 "dynamic": True,
-                "version": "8f82eae72f0030c3f70f2f347449106156845685",
+                "version": "44b1e57bc098d20cbff273ace490d98ffc6fe33d",
                 "urls": [
                     {"url": "https://github.com/graalvm/graaljs.git", "kind" : "git"},
                     {"url": "https://curio.ssw.jku.at/nexus/content/repositories/snapshots", "kind": "binary"},
@@ -57,7 +57,7 @@ suite = {
             },
             {
                 "name": "truffleruby",
-                "version": "ffeea5619fa8a123da947379ae038c9dcac1205d",
+                "version": "f741b24f11f0c8026fda8c65f355a91594fb678b",
                 "dynamic": True,
                 "urls": [
                     {"url": "https://github.com/oracle/truffleruby.git", "kind": "git"},
@@ -66,7 +66,7 @@ suite = {
             },
             {
                 "name": "fastr",
-                "version": "b35a82e9389ced58eca50433b8983b899197dfef",
+                "version": "1cbb4001b868b3638bac1d53e0eac89fad4bb0c3",
                 "dynamic": True,
                 "urls": [
                     {"url": "https://github.com/oracle/fastr.git", "kind": "git"},
@@ -75,7 +75,7 @@ suite = {
             },
             {
                 "name": "graalpython",
-                "version": "484ee948f71db7456e53039419d66dafcf0b70ba",
+                "version": "56a270f7d31b6fb44eed0946ba91fd8f5e57da90",
                 "dynamic": True,
                 "urls": [
                     {"url": "https://github.com/graalvm/graalpython.git", "kind": "git"},
@@ -91,7 +91,7 @@ suite = {
             "sourceDirs" : ["src"],
             "javaCompliance" : "1.8+",
             "license" : "GPLv2-CPE",
-            "checkstyleVersion" : "8.8",
+            "checkstyleVersion" : "8.36.1",
             "dependencies": [
                 "sdk:LAUNCHER_COMMON",
                 "truffle:TruffleJSON",
@@ -118,23 +118,15 @@ suite = {
                 "sdk:LAUNCHER_COMMON",
             ],
         },
-        "org.graalvm.polybench.jdk11" : {
-            "subDir" : "src",
-            "sourceDirs" : ["src"],
-            "dependencies" : [
-                "org.graalvm.polybench",
-            ],
-            "requires" : [
-                "java.logging",
-                "jdk.jfr",
-            ],
-            "javaCompliance" : "11+",
-            "license" : "GPLv2-CPE",
-            "checkstyle": "org.graalvm.component.installer",
-            "checkPackagePrefix" : "false",
-      		"overlayTarget" : "org.graalvm.polybench",
-      		"multiReleaseJarVersion" : "11",
-        },
+    },
+
+    "libraries" : {
+        # Note: small warmup benchmarks can be placed directly under `graal/vm/benchmarks/warmup`
+        # and uncomment the corresponding line for the `layout` of `POLYBENCH_BENCHMARKS` in current suite.
+        "WARMUP_BENCHMARKS" : {
+            "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/polybench/warmup-benchmarks-0.1.tar.gz"],
+            "sha1" : "4e4a81c096ecc4ba7c4de9ab8ca5180e93c85e60"
+        }
     },
 
     "distributions": {
@@ -212,6 +204,12 @@ suite = {
                 "./compiler/": [
                     "file:benchmarks/compiler/*",
                 ],
+                "./warmup/": [
+                    # "file:benchmarks/warmup/*.js",
+                    # "file:benchmarks/warmup/*.rb",
+                    # "file:benchmarks/warmup/*.py",
+                    "extracted-dependency:WARMUP_BENCHMARKS/*"
+                ]
             },
             "defaultBuild": False,
         },

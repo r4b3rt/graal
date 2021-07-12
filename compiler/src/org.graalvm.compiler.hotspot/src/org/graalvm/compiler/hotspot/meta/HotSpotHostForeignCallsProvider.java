@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -67,6 +67,7 @@ import static org.graalvm.compiler.hotspot.HotSpotBackend.UNWIND_EXCEPTION_TO_CA
 import static org.graalvm.compiler.hotspot.HotSpotBackend.VECTORIZED_MISMATCH;
 import static org.graalvm.compiler.hotspot.HotSpotBackend.VM_ERROR;
 import static org.graalvm.compiler.hotspot.HotSpotBackend.WRONG_METHOD_HANDLER;
+import static org.graalvm.compiler.hotspot.HotSpotForeignCallLinkage.RegisterEffect.COMPUTES_REGISTERS_KILLED;
 import static org.graalvm.compiler.hotspot.HotSpotForeignCallLinkage.RegisterEffect.DESTROYS_ALL_CALLER_SAVE_REGISTERS;
 import static org.graalvm.compiler.hotspot.HotSpotHostBackend.DEOPT_BLOB_UNCOMMON_TRAP;
 import static org.graalvm.compiler.hotspot.HotSpotHostBackend.DEOPT_BLOB_UNPACK;
@@ -109,6 +110,7 @@ import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
 import org.graalvm.compiler.core.common.spi.ForeignCallSignature;
 import org.graalvm.compiler.core.common.spi.ForeignCallsProvider;
 import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.compiler.hotspot.ArrayIndexOfStub;
 import org.graalvm.compiler.hotspot.CompilerRuntimeHotSpotVMConfig;
 import org.graalvm.compiler.hotspot.GraalHotSpotVMConfig;
 import org.graalvm.compiler.hotspot.HotSpotGraalRuntimeProvider;
@@ -129,6 +131,7 @@ import org.graalvm.compiler.nodes.NamedLocationIdentity;
 import org.graalvm.compiler.nodes.extended.BytecodeExceptionNode.BytecodeExceptionKind;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.replacements.SnippetTemplate;
+import org.graalvm.compiler.replacements.ArrayIndexOf;
 import org.graalvm.compiler.replacements.arraycopy.ArrayCopyForeignCalls;
 import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 import org.graalvm.compiler.word.Word;
@@ -151,6 +154,9 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
 
     public static final HotSpotForeignCallDescriptor NOTIFY = new HotSpotForeignCallDescriptor(LEAF_NO_VZERO, NOT_REEXECUTABLE, any(), "object_notify", boolean.class, Object.class);
     public static final HotSpotForeignCallDescriptor NOTIFY_ALL = new HotSpotForeignCallDescriptor(LEAF_NO_VZERO, NOT_REEXECUTABLE, any(), "object_notifyAll", boolean.class, Object.class);
+
+    public static final HotSpotForeignCallDescriptor INVOKE_STATIC_METHOD_ONE_ARG = new HotSpotForeignCallDescriptor(SAFEPOINT, REEXECUTABLE, NO_LOCATIONS,
+                    "JVMCIRuntime::invoke_static_method_one_arg", long.class, Word.class, Word.class, long.class);
 
     public static class TestForeignCalls {
         public static final HotSpotForeignCallDescriptor BOOLEAN_RETURNS_BOOLEAN = new HotSpotForeignCallDescriptor(SAFEPOINT, REEXECUTABLE, NO_LOCATIONS, "boolean returns boolean",
@@ -193,14 +199,6 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
         }
 
         static long longReturnsLong(long arg) {
-            return arg;
-        }
-
-        static float floatReturnsFloat(float arg) {
-            return arg;
-        }
-
-        static double doubleReturnsDouble(double arg) {
             return arg;
         }
 
@@ -280,10 +278,6 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
         invokeJavaMethodStub(options, providers, TestForeignCalls.INT_RETURNS_INT, config.invokeJavaMethodAddress, intReturnsInt);
         ResolvedJavaMethod longReturnsLong = SnippetTemplate.AbstractTemplates.findMethod(providers.getMetaAccess(), TestForeignCalls.class, "longReturnsLong");
         invokeJavaMethodStub(options, providers, TestForeignCalls.LONG_RETURNS_LONG, config.invokeJavaMethodAddress, longReturnsLong);
-        ResolvedJavaMethod floatReturnsFloat = SnippetTemplate.AbstractTemplates.findMethod(providers.getMetaAccess(), TestForeignCalls.class, "floatReturnsFloat");
-        invokeJavaMethodStub(options, providers, TestForeignCalls.FLOAT_RETURNS_FLOAT, config.invokeJavaMethodAddress, floatReturnsFloat);
-        ResolvedJavaMethod doubleReturnsDouble = SnippetTemplate.AbstractTemplates.findMethod(providers.getMetaAccess(), TestForeignCalls.class, "doubleReturnsDouble");
-        invokeJavaMethodStub(options, providers, TestForeignCalls.DOUBLE_RETURNS_DOUBLE, config.invokeJavaMethodAddress, doubleReturnsDouble);
         ResolvedJavaMethod objectReturnsObject = SnippetTemplate.AbstractTemplates.findMethod(providers.getMetaAccess(), TestForeignCalls.class, "objectReturnsObject");
         invokeJavaMethodStub(options, providers, TestForeignCalls.OBJECT_RETURNS_OBJECT, config.invokeJavaMethodAddress, objectReturnsObject);
 
@@ -424,6 +418,10 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
             linkForeignCall(options, providers, DYNAMIC_NEW_INSTANCE_OR_NULL, c.dynamicNewInstanceOrNullAddress, PREPEND_THREAD);
         }
 
+        link(new ArrayIndexOfStub(options, providers,
+                        registerStubCall(ArrayIndexOf.STUB_INDEX_OF_1_BYTE, LEAF, REEXECUTABLE, COMPUTES_REGISTERS_KILLED, NO_LOCATIONS)));
+        link(new ArrayIndexOfStub(options, providers,
+                        registerStubCall(ArrayIndexOf.STUB_INDEX_OF_1_CHAR_COMPACT, LEAF, REEXECUTABLE, COMPUTES_REGISTERS_KILLED, NO_LOCATIONS)));
         link(new ExceptionHandlerStub(options, providers, foreignCalls.get(EXCEPTION_HANDLER.getSignature())));
         link(new UnwindExceptionToCallerStub(options, providers,
                         registerStubCall(UNWIND_EXCEPTION_TO_CALLER, DESTROYS_ALL_CALLER_SAVE_REGISTERS)));

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -54,19 +54,9 @@ import com.oracle.truffle.regex.tregex.parser.ast.visitors.NFATraversalRegexASTV
  * expressions with the exception of the following features:
  * </p>
  * <ul>
- * <li>case-insensitive matching: Ruby regular expression allow both case-sensitive matching and
- * case-insensitive matching within the same regular expression. Also, Ruby's notion of
- * case-insensitivity differs from the one in ECMAScript. For that reason, we would have to
- * translate all Ruby regular expressions to case-sensitive ECMAScript regular expressions and we
- * would support case-insensitivity by case-folding any character matchers in the Ruby regular
- * expression. However, Ruby has a more sophisticated notion of case-insensitivity than ECMAScript,
- * which can lead to, e.g., two characters such as "ss" matching a single character such as
- * "&#xDF;", meaning there is no longer a 1-to-1 correspondence between character matchers. In order
- * to support this, we would have to replicate the same case-folding behaviorin the Ruby flavor
- * implementation.</li>
- * <li>case-insensitive backreferences: As stated above, case-insensitive matching has to be
- * implemented by case-folding. However, there is no way we can case-fold a backreference, since we
- * don't know which string it will match.</li>
+ * <li>case-insensitive backreferences: In Ruby, case-insensitive matching has to be implemented by
+ * case-folding. However, there is no way we can case-fold a backreference, since we don't know
+ * which string it will match.</li>
  * <li>\G escape sequence: In Ruby regular expressions, \G can be used to assert that we are at some
  * special position that was marked by a previous execution of the regular expression on that input.
  * ECMAScript doesn't support assertions which check the current index against some reference
@@ -250,11 +240,12 @@ import com.oracle.truffle.regex.tregex.parser.ast.visitors.NFATraversalRegexASTV
  * respectively), so that at runtime, only one of the two transitions will be admissible.</li>
  * </ul>
  */
-public final class RubyFlavor implements RegexFlavor {
+public final class RubyFlavor extends RegexFlavor {
 
     public static final RubyFlavor INSTANCE = new RubyFlavor();
 
     private RubyFlavor() {
+        super(BACKREFERENCES_TO_UNMATCHED_GROUPS_FAIL | EMPTY_CHECKS_MONITOR_CAPTURE_GROUPS | NESTED_CAPTURE_GROUPS_KEPT_ON_LOOP_REENTRY | FAILING_EMPTY_CHECKS_DONT_BACKTRACK);
     }
 
     @Override

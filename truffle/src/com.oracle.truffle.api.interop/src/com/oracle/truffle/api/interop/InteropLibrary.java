@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -993,12 +993,12 @@ public abstract class InteropLibrary extends Library {
      *
      * @since 21.1
      */
-    public final boolean isHashEntryWritable(Object receiver, Object key) {
+    public boolean isHashEntryWritable(Object receiver, Object key) {
         return isHashEntryModifiable(receiver, key) || isHashEntryInsertable(receiver, key);
     }
 
     /**
-     * Associates the specified value with the specified key in the receiver. Writing a member is
+     * Associates the specified value with the specified key in the receiver. Writing the entry is
      * allowed if is existing and {@link #isHashEntryModifiable(Object, Object) modifiable}, or not
      * existing and {@link #isHashEntryInsertable(Object, Object) insertable}.
      *
@@ -1055,7 +1055,7 @@ public abstract class InteropLibrary extends Library {
      *
      * @since 21.1
      */
-    public final boolean isHashEntryExisting(Object receiver, Object key) {
+    public boolean isHashEntryExisting(Object receiver, Object key) {
         return isHashEntryReadable(receiver, key) || isHashEntryModifiable(receiver, key) || isHashEntryRemovable(receiver, key);
     }
 
@@ -3649,6 +3649,15 @@ public abstract class InteropLibrary extends Library {
         }
 
         @Override
+        public boolean isHashEntryWritable(Object receiver, Object key) {
+            assert preCondition(receiver);
+            assert validArgument(receiver, key);
+            boolean result = delegate.isHashEntryWritable(receiver, key);
+            assert result == (delegate.isHashEntryModifiable(receiver, key) || delegate.isHashEntryInsertable(receiver, key)) : violationInvariant(receiver, key);
+            return result;
+        }
+
+        @Override
         public void writeHashEntry(Object receiver, Object key, Object value) throws UnsupportedMessageException, UnknownKeyException, UnsupportedTypeException {
             if (CompilerDirectives.inCompiledCode()) {
                 delegate.writeHashEntry(receiver, key, value);
@@ -3696,6 +3705,16 @@ public abstract class InteropLibrary extends Library {
                 assert !(e instanceof UnsupportedMessageException) || !wasRemovable : violationInvariant(receiver, key);
                 throw e;
             }
+        }
+
+        @Override
+        public boolean isHashEntryExisting(Object receiver, Object key) {
+            assert preCondition(receiver);
+            assert validArgument(receiver, key);
+            boolean result = delegate.isHashEntryExisting(receiver, key);
+            assert result == (delegate.isHashEntryReadable(receiver, key) || delegate.isHashEntryModifiable(receiver, key) || delegate.isHashEntryRemovable(receiver, key)) : violationInvariant(
+                            receiver, key);
+            return result;
         }
 
         @Override

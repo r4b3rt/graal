@@ -25,20 +25,6 @@
  */
 package org.graalvm.compiler.asm.aarch64;
 
-import jdk.vm.ci.aarch64.AArch64;
-import jdk.vm.ci.aarch64.AArch64.CPUFeature;
-import jdk.vm.ci.aarch64.AArch64.Flag;
-import jdk.vm.ci.code.Register;
-import jdk.vm.ci.code.TargetDescription;
-import org.graalvm.compiler.asm.Assembler;
-import org.graalvm.compiler.asm.aarch64.AArch64Address.AddressingMode;
-import org.graalvm.compiler.core.common.NumUtil;
-import org.graalvm.compiler.debug.GraalError;
-
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.util.Arrays;
-
 import static jdk.vm.ci.aarch64.AArch64.CPU;
 import static jdk.vm.ci.aarch64.AArch64.SIMD;
 import static jdk.vm.ci.aarch64.AArch64.cpuRegisters;
@@ -141,6 +127,21 @@ import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.InstructionType.
 import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.InstructionType.General64;
 import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.InstructionType.floatFromSize;
 import static org.graalvm.compiler.asm.aarch64.AArch64Assembler.InstructionType.generalFromSize;
+
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.Arrays;
+
+import org.graalvm.compiler.asm.Assembler;
+import org.graalvm.compiler.asm.aarch64.AArch64Address.AddressingMode;
+import org.graalvm.compiler.core.common.NumUtil;
+import org.graalvm.compiler.debug.GraalError;
+
+import jdk.vm.ci.aarch64.AArch64;
+import jdk.vm.ci.aarch64.AArch64.CPUFeature;
+import jdk.vm.ci.aarch64.AArch64.Flag;
+import jdk.vm.ci.code.Register;
+import jdk.vm.ci.code.TargetDescription;
 
 public abstract class AArch64Assembler extends Assembler {
 
@@ -636,7 +637,9 @@ public abstract class AArch64Assembler extends Assembler {
 
     public enum SystemRegister {
         FPCR(0b11, 0b011, 0b0100, 0b0100, 0b000),
-        FPSR(0b11, 0b011, 0b0100, 0b0100, 0b001);
+        FPSR(0b11, 0b011, 0b0100, 0b0100, 0b001),
+        /* Counter-timer Virtual Count register */
+        CNTVCT_EL0(0b11, 0b011, 0b110, 0b0000, 0b010);
 
         SystemRegister(int op0, int op1, int crn, int crm, int op2) {
             this.op0 = op0;
@@ -658,7 +661,8 @@ public abstract class AArch64Assembler extends Assembler {
     }
 
     public enum DataCacheOperationType {
-        ZVA(0b011, 0b0100, 0b001);
+        ZVA(0b011, 0b0100, 0b001),
+        CVAP(0b011, 0b1100, 0b001);
 
         DataCacheOperationType(int op1, int crm, int op2) {
             this.op1 = op1;
@@ -1010,6 +1014,13 @@ public abstract class AArch64Assembler extends Assembler {
      * @param imm28 Signed 28-bit offset, has to be word aligned.
      */
     public void bl(int imm28) {
+        /*
+         * Currently within Graal all bl instructions will be patched later.
+         *
+         * Hence, for now imm28 should always be 0. If at a later time the imm28 can be a meaningful
+         * value, then this assert can be reevaluated.
+         */
+        assert imm28 == 0;
         unconditionalBranchImmInstruction(imm28, Instruction.BL, -1);
     }
 
@@ -1282,8 +1293,8 @@ public abstract class AArch64Assembler extends Assembler {
     /**
      * Insert ldp/stp at the specified position.
      */
-    protected void insertLdpStp(int position, int size, Instruction instr, Register rt, Register rt2, AArch64Address address) {
-        int instructionEncoding = generateLoadStorePairInstructionEncoding(instr, rt, rt2, address, false, getLog2TransferSize(size));
+    protected void insertLdpStp(int position, int size, Instruction instr, boolean isFP, Register rt, Register rt2, AArch64Address address) {
+        int instructionEncoding = generateLoadStorePairInstructionEncoding(instr, rt, rt2, address, isFP, getLog2TransferSize(size));
         emitInt(instructionEncoding, position);
     }
 
@@ -1396,7 +1407,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param rt general purpose register. May not be null or stackpointer.
      * @param rn general purpose register.
      */
-    public void ldaxr(int size, Register rt, Register rn) {
+    protected void ldaxr(int size, Register rt, Register rn) {
         assert size == 8 || size == 16 || size == 32 || size == 64;
         exclusiveLoadInstruction(LDAXR, rt, rn, getLog2TransferSize(size));
     }
@@ -1411,7 +1422,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param rt general purpose register. May not be null or stackpointer.
      * @param rn general purpose register.
      */
-    public void stlxr(int size, Register rs, Register rt, Register rn) {
+    protected void stlxr(int size, Register rs, Register rt, Register rn) {
         assert size == 8 || size == 16 || size == 32 || size == 64;
         exclusiveStoreInstruction(STLXR, rs, rt, rn, getLog2TransferSize(size));
     }
@@ -1425,7 +1436,7 @@ public abstract class AArch64Assembler extends Assembler {
      */
     private void exclusiveLoadInstruction(Instruction instr, Register rt, Register rn, int log2TransferSize) {
         assert log2TransferSize >= 0 && log2TransferSize < 4;
-        assert rt.getRegisterCategory().equals(CPU);
+        assert rt.getRegisterCategory().equals(CPU) && rn.getRegisterCategory().equals(CPU);
         int transferSizeEncoding = log2TransferSize << LoadStoreTransferSizeOffset;
         emitInt(transferSizeEncoding | instr.encoding | rn(rn) | rt(rt));
     }
@@ -1442,7 +1453,7 @@ public abstract class AArch64Assembler extends Assembler {
      */
     private void exclusiveStoreInstruction(Instruction instr, Register rs, Register rt, Register rn, int log2TransferSize) {
         assert log2TransferSize >= 0 && log2TransferSize < 4;
-        assert rt.getRegisterCategory().equals(CPU) && rs.getRegisterCategory().equals(CPU) && (instr == STLR || !rs.equals(rt));
+        assert rt.getRegisterCategory().equals(CPU) && rs.getRegisterCategory().equals(CPU) && rn.getRegisterCategory().equals(CPU) && (instr == STLR || (!rs.equals(rt) && !rs.equals(rn)));
         int transferSizeEncoding = log2TransferSize << LoadStoreTransferSizeOffset;
         emitInt(transferSizeEncoding | instr.encoding | rs2(rs) | rn(rn) | rt(rt));
     }
@@ -1466,7 +1477,7 @@ public abstract class AArch64Assembler extends Assembler {
 
     private void compareAndSwapInstruction(Instruction instr, Register rs, Register rt, Register rn, int log2TransferSize, boolean acquire, boolean release) {
         assert log2TransferSize >= 0 && log2TransferSize < 4;
-        assert rt.getRegisterCategory().equals(CPU) && rs.getRegisterCategory().equals(CPU) && !rs.equals(rt);
+        assert rt.getRegisterCategory().equals(CPU) && rs.getRegisterCategory().equals(CPU) && rn.getRegisterCategory().equals(CPU);
         int transferSizeEncoding = log2TransferSize << LoadStoreTransferSizeOffset;
         emitInt(transferSizeEncoding | instr.encoding | rs2(rs) | rn(rn) | rt(rt) | (acquire ? 1 : 0) << CASAcquireOffset | (release ? 1 : 0) << CASReleaseOffset);
     }
@@ -1490,7 +1501,7 @@ public abstract class AArch64Assembler extends Assembler {
 
     private void loadAndAddInstruction(Instruction instr, Register rs, Register rt, Register rn, int log2TransferSize, boolean acquire, boolean release) {
         assert log2TransferSize >= 0 && log2TransferSize < 4;
-        assert rt.getRegisterCategory().equals(CPU) && rs.getRegisterCategory().equals(CPU) && !rs.equals(rt);
+        assert rt.getRegisterCategory().equals(CPU) && rs.getRegisterCategory().equals(CPU) && rn.getRegisterCategory().equals(CPU);
         int transferSizeEncoding = log2TransferSize << LoadStoreTransferSizeOffset;
         emitInt(transferSizeEncoding | instr.encoding | rs2(rs) | rn(rn) | rt(rt) | (acquire ? 1 : 0) << LDADDAcquireOffset | (release ? 1 : 0) << LDADDReleaseOffset);
     }
@@ -1513,7 +1524,7 @@ public abstract class AArch64Assembler extends Assembler {
 
     private void swapInstruction(Instruction instr, Register rs, Register rt, Register rn, int log2TransferSize, boolean acquire, boolean release) {
         assert log2TransferSize >= 0 && log2TransferSize < 4;
-        assert rt.getRegisterCategory().equals(CPU) && rs.getRegisterCategory().equals(CPU) && !rs.equals(rt);
+        assert rt.getRegisterCategory().equals(CPU) && rs.getRegisterCategory().equals(CPU) && rn.getRegisterCategory().equals(CPU);
         int transferSizeEncoding = log2TransferSize << LoadStoreTransferSizeOffset;
         emitInt(transferSizeEncoding | instr.encoding | rs2(rs) | rn(rn) | rt(rt) | (acquire ? 1 : 0) << LDADDAcquireOffset | (release ? 1 : 0) << LDADDReleaseOffset);
     }
@@ -1717,7 +1728,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param bimm logical immediate. See {@link LogicalBitmaskImmediateEncoding} for exact
      *            definition.
      */
-    protected void orr(int size, Register dst, Register src, long bimm) {
+    public void orr(int size, Register dst, Register src, long bimm) {
         assert !dst.equals(zr);
         assert !src.equals(sp);
         logicalImmInstruction(ORR, dst, src, bimm, generalFromSize(size));
@@ -2007,7 +2018,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param shiftType all types allowed, may not be null.
      * @param shiftAmt must be in range 0 to size - 1.
      */
-    protected void and(int size, Register dst, Register src1, Register src2, ShiftType shiftType, int shiftAmt) {
+    public void and(int size, Register dst, Register src1, Register src2, ShiftType shiftType, int shiftAmt) {
         logicalRegInstruction(AND, dst, src1, src2, shiftType, shiftAmt, generalFromSize(size));
     }
 
@@ -2035,7 +2046,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param shiftType all types allowed, may not be null.
      * @param shiftAmt must be in range 0 to size - 1.
      */
-    protected void bic(int size, Register dst, Register src1, Register src2, ShiftType shiftType, int shiftAmt) {
+    public void bic(int size, Register dst, Register src1, Register src2, ShiftType shiftType, int shiftAmt) {
         logicalRegInstruction(BIC, dst, src1, src2, shiftType, shiftAmt, generalFromSize(size));
     }
 
@@ -2063,7 +2074,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param shiftType all types allowed, may not be null.
      * @param shiftAmt must be in range 0 to size - 1.
      */
-    protected void eon(int size, Register dst, Register src1, Register src2, ShiftType shiftType, int shiftAmt) {
+    public void eon(int size, Register dst, Register src1, Register src2, ShiftType shiftType, int shiftAmt) {
         logicalRegInstruction(EON, dst, src1, src2, shiftType, shiftAmt, generalFromSize(size));
     }
 
@@ -2077,7 +2088,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param shiftType all types allowed, may not be null.
      * @param shiftAmt must be in range 0 to size - 1.
      */
-    protected void eor(int size, Register dst, Register src1, Register src2, ShiftType shiftType, int shiftAmt) {
+    public void eor(int size, Register dst, Register src1, Register src2, ShiftType shiftType, int shiftAmt) {
         logicalRegInstruction(EOR, dst, src1, src2, shiftType, shiftAmt, generalFromSize(size));
     }
 
@@ -2091,7 +2102,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param shiftType all types allowed, may not be null.
      * @param shiftAmt must be in range 0 to size - 1.
      */
-    protected void orr(int size, Register dst, Register src1, Register src2, ShiftType shiftType, int shiftAmt) {
+    public void orr(int size, Register dst, Register src1, Register src2, ShiftType shiftType, int shiftAmt) {
         logicalRegInstruction(ORR, dst, src1, src2, shiftType, shiftAmt, generalFromSize(size));
     }
 
@@ -2105,7 +2116,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param shiftType all types allowed, may not be null.
      * @param shiftAmt must be in range 0 to size - 1.
      */
-    protected void orn(int size, Register dst, Register src1, Register src2, ShiftType shiftType, int shiftAmt) {
+    public void orn(int size, Register dst, Register src1, Register src2, ShiftType shiftType, int shiftAmt) {
         logicalRegInstruction(ORN, dst, src1, src2, shiftType, shiftAmt, generalFromSize(size));
     }
 
@@ -2126,7 +2137,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param src1 general purpose register. May not be null or stackpointer.
      * @param src2 general purpose register. May not be null or stackpointer.
      */
-    protected void asr(int size, Register dst, Register src1, Register src2) {
+    public void asr(int size, Register dst, Register src1, Register src2) {
         dataProcessing2SourceOp(ASRV, dst, src1, src2, generalFromSize(size));
     }
 
@@ -2138,7 +2149,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param src1 general purpose register. May not be null or stackpointer.
      * @param src2 general purpose register. May not be null or stackpointer.
      */
-    protected void lsl(int size, Register dst, Register src1, Register src2) {
+    public void lsl(int size, Register dst, Register src1, Register src2) {
         dataProcessing2SourceOp(LSLV, dst, src1, src2, generalFromSize(size));
     }
 
@@ -2150,7 +2161,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param src1 general purpose register. May not be null or stackpointer.
      * @param src2 general purpose register. May not be null or stackpointer.
      */
-    protected void lsr(int size, Register dst, Register src1, Register src2) {
+    public void lsr(int size, Register dst, Register src1, Register src2) {
         dataProcessing2SourceOp(LSRV, dst, src1, src2, generalFromSize(size));
     }
 
@@ -2230,7 +2241,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param src2 general purpose register. May not be null or the stackpointer.
      * @param condition any condition flag. May not be null.
      */
-    protected void csel(int size, Register dst, Register src1, Register src2, ConditionFlag condition) {
+    public void csel(int size, Register dst, Register src1, Register src2, ConditionFlag condition) {
         conditionalSelectInstruction(CSEL, dst, src1, src2, condition, generalFromSize(size));
     }
 
@@ -2243,7 +2254,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param src2 general purpose register. May not be null or the stackpointer.
      * @param condition any condition flag. May not be null.
      */
-    protected void csneg(int size, Register dst, Register src1, Register src2, ConditionFlag condition) {
+    public void csneg(int size, Register dst, Register src1, Register src2, ConditionFlag condition) {
         conditionalSelectInstruction(CSNEG, dst, src1, src2, condition, generalFromSize(size));
     }
 
@@ -2278,7 +2289,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param src2 general purpose register. May not be null or the stackpointer.
      * @param src3 general purpose register. May not be null or the stackpointer.
      */
-    protected void madd(int size, Register dst, Register src1, Register src2, Register src3) {
+    public void madd(int size, Register dst, Register src1, Register src2, Register src3) {
         mulInstruction(MADD, dst, src1, src2, src3, generalFromSize(size));
     }
 
@@ -2291,7 +2302,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param src2 general purpose register. May not be null or the stackpointer.
      * @param src3 general purpose register. May not be null or the stackpointer.
      */
-    protected void msub(int size, Register dst, Register src1, Register src2, Register src3) {
+    public void msub(int size, Register dst, Register src1, Register src2, Register src3) {
         mulInstruction(MSUB, dst, src1, src2, src3, generalFromSize(size));
     }
 
@@ -2348,6 +2359,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param src3 general purpose register. May not be null or the stackpointer.
      */
     public void smaddl(Register dst, Register src1, Register src2, Register src3) {
+        assert (!dst.equals(sp) && !src1.equals(sp) && !src2.equals(sp) && !src3.equals(sp));
         smullInstruction(MADD, dst, src1, src2, src3);
     }
 
@@ -2360,6 +2372,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param src3 general purpose register. May not be null or the stackpointer.
      */
     public void smsubl(Register dst, Register src1, Register src2, Register src3) {
+        assert (!dst.equals(sp) && !src1.equals(sp) && !src2.equals(sp) && !src3.equals(sp));
         smullInstruction(MSUB, dst, src1, src2, src3);
     }
 
@@ -2832,7 +2845,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param src2 floating point register. May not be null.
      * @param src3 floating point register. May not be null.
      */
-    protected void fmadd(int size, Register dst, Register src1, Register src2, Register src3) {
+    public void fmadd(int size, Register dst, Register src1, Register src2, Register src3) {
         fpDataProcessing3Source(FMADD, dst, src1, src2, src3, floatFromSize(size));
     }
 
@@ -2939,7 +2952,7 @@ public abstract class AArch64Assembler extends Assembler {
      * @param src2 floating point register. May not be null.
      * @param condition every condition allowed. May not be null.
      */
-    protected void fcsel(int size, Register dst, Register src1, Register src2, ConditionFlag condition) {
+    public void fcsel(int size, Register dst, Register src1, Register src2, ConditionFlag condition) {
         assert dst.getRegisterCategory().equals(SIMD);
         assert src1.getRegisterCategory().equals(SIMD);
         assert src2.getRegisterCategory().equals(SIMD);
@@ -3009,15 +3022,13 @@ public abstract class AArch64Assembler extends Assembler {
     }
 
     /**
-     * Possible barrier definitions for Aarch64. LOAD_LOAD and LOAD_STORE map to the same underlying
-     * barrier.
+     * Barrier definitions for AArch64.
      *
      * We only need synchronization across the inner shareable domain (see B2-90 in the Reference
      * documentation).
      */
     public enum BarrierKind {
-        LOAD_LOAD(0x9, "ISHLD"),
-        LOAD_STORE(0x9, "ISHLD"),
+        LOAD_ANY(0x9, "ISHLD"),
         STORE_STORE(0xA, "ISHST"),
         ANY_ANY(0xB, "ISH"),
         SYSTEM(0xF, "SYS");
@@ -3056,10 +3067,20 @@ public abstract class AArch64Assembler extends Assembler {
         emitInt(ISB.encoding | BarrierOp | BarrierKind.SYSTEM.encoding << BarrierKindOffset);
     }
 
+    /**
+     * C.6.2.194 Move System Register<br>
+     * <p>
+     * Reads an AArch64 System register into a general-purpose register.
+     */
     public void mrs(Register dst, SystemRegister systemRegister) {
         emitInt(MRS.encoding | systemRegister.encoding() | rt(dst));
     }
 
+    /**
+     * C.6.2.196 Move general-purpose register to System Register<br>
+     * <p>
+     * Writes an AArch64 System register from general-purpose register.
+     */
     public void msr(SystemRegister systemRegister, Register src) {
         emitInt(MRS.encoding | systemRegister.encoding() | rt(src));
     }

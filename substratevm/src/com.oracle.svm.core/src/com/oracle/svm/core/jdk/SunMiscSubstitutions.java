@@ -40,7 +40,7 @@ import org.graalvm.nativeimage.UnmanagedMemory;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.MemoryUtil;
+import com.oracle.svm.core.JavaMemoryUtil;
 import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
@@ -49,6 +49,7 @@ import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
+import com.oracle.svm.core.hub.PredefinedClassesSupport;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.os.VirtualMemoryProvider;
 import com.oracle.svm.core.util.VMError;
@@ -66,9 +67,6 @@ final class Target_Unsafe_Core {
             throw new IllegalArgumentException();
         }
         Pointer result = UnmanagedMemory.malloc(WordFactory.unsigned(bytes));
-        if (result.equal(0)) {
-            throw new OutOfMemoryError();
-        }
         return result.rawValue();
     }
 
@@ -91,9 +89,6 @@ final class Target_Unsafe_Core {
             result = UnmanagedMemory.realloc(WordFactory.unsigned(address), WordFactory.unsigned(bytes));
         } else {
             result = UnmanagedMemory.malloc(WordFactory.unsigned(bytes));
-        }
-        if (result.equal(0)) {
-            throw new OutOfMemoryError();
         }
         return result.rawValue();
     }
@@ -121,31 +116,31 @@ final class Target_Unsafe_Core {
     @TargetElement(onlyWith = JDK8OrEarlier.class)
     @Substitute
     private void copyMemory(Object srcBase, long srcOffset, Object destBase, long destOffset, long bytes) {
-        MemoryUtil.unsafeCopyMemory(srcBase, srcOffset, destBase, destOffset, bytes);
+        JavaMemoryUtil.unsafeCopyMemory(srcBase, srcOffset, destBase, destOffset, bytes);
     }
 
     @TargetElement(onlyWith = JDK11OrLater.class)
     @Substitute
     private void copyMemory0(Object srcBase, long srcOffset, Object destBase, long destOffset, long bytes) {
-        MemoryUtil.unsafeCopyMemory(srcBase, srcOffset, destBase, destOffset, bytes);
+        JavaMemoryUtil.unsafeCopyMemory(srcBase, srcOffset, destBase, destOffset, bytes);
     }
 
     @TargetElement(onlyWith = JDK11OrLater.class)
     @Substitute
     private void copySwapMemory0(Object srcBase, long srcOffset, Object destBase, long destOffset, long bytes, long elemSize) {
-        MemoryUtil.unsafeCopySwapMemory(srcBase, srcOffset, destBase, destOffset, bytes, elemSize);
+        JavaMemoryUtil.unsafeCopySwapMemory(srcBase, srcOffset, destBase, destOffset, bytes, elemSize);
     }
 
     @TargetElement(onlyWith = JDK8OrEarlier.class)
     @Substitute
     private void setMemory(Object destBase, long destOffset, long bytes, byte bvalue) {
-        MemoryUtil.unsafeSetMemory(destBase, destOffset, bytes, bvalue);
+        JavaMemoryUtil.unsafeSetMemory(destBase, destOffset, bytes, bvalue);
     }
 
     @TargetElement(onlyWith = JDK11OrLater.class)
     @Substitute
     private void setMemory0(Object destBase, long destOffset, long bytes, byte bvalue) {
-        MemoryUtil.unsafeSetMemory(destBase, destOffset, bytes, bvalue);
+        JavaMemoryUtil.unsafeSetMemory(destBase, destOffset, bytes, bvalue);
     }
 
     @Substitute
@@ -207,23 +202,15 @@ final class Target_Unsafe_Core {
     }
 
     @Substitute
-    private long staticFieldOffset(Field f) {
-        throw VMError.unsupportedFeature("Unsupported method of Unsafe");
-    }
-
-    @Substitute
-    private Object staticFieldBase(Field f) {
-        throw VMError.unsupportedFeature("Unsupported method of Unsafe");
-    }
-
-    @Substitute
     private Class<?> defineClass(String name, byte[] b, int off, int len, ClassLoader loader, ProtectionDomain protectionDomain) {
-        throw VMError.unsupportedFeature("Defining new classes at run time is not supported. All classes need to be known at image build time.");
+        return PredefinedClassesSupport.loadClass(loader, name, b, off, len, protectionDomain);
     }
 
+    // JDK-8243287
     @Substitute
+    @TargetElement(onlyWith = JDK16OrEarlier.class)
     private Class<?> defineAnonymousClass(Class<?> hostClass, byte[] data, Object[] cpPatches) {
-        throw VMError.unsupportedFeature("Defining new classes at run time is not supported. All classes need to be known at image build time.");
+        throw VMError.unsupportedFeature("Defining anonymous classes at runtime is not supported.");
     }
 
     @Substitute
@@ -301,8 +288,9 @@ final class Target_Unsafe_Core {
         throw VMError.unsupportedFeature("Target_Unsafe_Core.defineClass0(String, byte[], int, int, ClassLoader, ProtectionDomain)");
     }
 
+    // JDK-8243287
     @Delete
-    @TargetElement(onlyWith = JDK11OrLater.class)
+    @TargetElement(onlyWith = JDK11To16.class)
     private native Class<?> defineAnonymousClass0(Class<?> hostClass, byte[] data, Object[] cpPatches);
 
     @Delete

@@ -46,6 +46,11 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 
+import jdk.vm.ci.meta.MetaAccessProvider;
+import jdk.vm.ci.meta.ResolvedJavaField;
+import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.word.Pointer;
 
@@ -62,6 +67,7 @@ import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.ReflectionUtil;
 
 // Checkstyle: stop
+import sun.security.jca.ProviderList;
 import sun.security.util.SecurityConstants;
 // Checkstyle: resume
 
@@ -231,6 +237,52 @@ final class Target_javax_crypto_CryptoAllPermission {
     static Target_javax_crypto_CryptoAllPermission INSTANCE;
 }
 
+@Platforms(Platform.WINDOWS.class)
+@TargetClass(value = java.security.Provider.class)
+final class Target_java_security_Provider {
+    @Alias //
+    private transient boolean initialized;
+
+    @Alias //
+    String name;
+
+    /*
+     * `Provider.checkInitialized` is called from all other Provider API methods, before any
+     * computation, so it is a convenient location to do our own initialization, e.g., to ensure
+     * that the required native libraries are loaded.
+     */
+    @Substitute
+    private void checkInitialized() {
+        if (!initialized) {
+            throw new IllegalStateException();
+        }
+        /* Do our own initialization. */
+        ProviderUtil.initialize(this);
+    }
+}
+
+final class ProviderUtil {
+    private static volatile boolean initialized = false;
+
+    static void initialize(Target_java_security_Provider provider) {
+        if (initialized) {
+            return;
+        }
+
+        if (provider.name.equals("SunMSCAPI")) {
+            try {
+                System.loadLibrary("sunmscapi");
+            } catch (Throwable ignored) {
+                /*
+                 * If the loading fails, later calls to native methods will also fail. So, in order
+                 * not to confuse users with unexpected stack traces, we ignore the exceptions here.
+                 */
+            }
+            initialized = true;
+        }
+    }
+}
+
 @TargetClass(className = "javax.crypto.ProviderVerifier", onlyWith = JDK11OrLater.class)
 @SuppressWarnings({"unused"})
 final class Target_javax_crypto_ProviderVerifier {
@@ -276,7 +328,8 @@ final class Target_javax_crypto_JceSecurity {
     // value == PROVIDER_VERIFIED is successfully verified
     // value is failure cause Exception in error case
     @Alias //
-    private static Map<Provider, Object> verificationResults;
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = VerificationCacheTransformer.class, disableCaching = true) //
+    private static Map<Object, Object> verificationResults;
 
     @Substitute
     @TargetElement(onlyWith = JDK8OrEarlier.class)
@@ -298,7 +351,7 @@ final class Target_javax_crypto_JceSecurity {
     @Substitute
     static Exception getVerificationResult(Provider p) {
         /* Start code block copied from original method. */
-        Object o = verificationResults.get(p);
+        Object o = verificationResults.get(JceSecurityUtil.providerKey(p));
         if (o == PROVIDER_VERIFIED) {
             return null;
         } else if (o != null) {
@@ -315,6 +368,24 @@ final class Target_javax_crypto_JceSecurity {
                         "All providers must be registered and verified in the Native Image builder. ");
     }
 
+    private static class VerificationCacheTransformer implements RecomputeFieldValue.CustomFieldValueTransformer {
+        @Override
+        public Object transform(MetaAccessProvider metaAccess, ResolvedJavaField original, ResolvedJavaField annotated, Object receiver, Object originalValue) {
+            return SecurityProvidersFilter.instance().cleanVerificationCache(originalValue);
+        }
+    }
+}
+
+@TargetClass(className = "javax.crypto.JceSecurity", innerClass = "IdentityWrapper", onlyWith = JDK16OrLater.class)
+@SuppressWarnings({"unused"})
+final class Target_javax_crypto_JceSecurity_IdentityWrapper {
+    @Alias //
+    Provider obj;
+
+    @Alias //
+    Target_javax_crypto_JceSecurity_IdentityWrapper(Provider obj) {
+        this.obj = obj;
+    }
 }
 
 class JceSecurityAccessor {
@@ -346,6 +417,15 @@ class JceSecurityAccessor {
 }
 
 final class JceSecurityUtil {
+
+    static Object providerKey(Provider p) {
+        if (JavaVersionUtil.JAVA_SPEC < 16) {
+            return p;
+        }
+        /* Starting with JDK 16 the verification results map key is an identity wrapper object. */
+        return new Target_javax_crypto_JceSecurity_IdentityWrapper(p);
+    }
+
     static RuntimeException shouldNotReach(String method) {
         throw VMError.shouldNotReachHere(method + " is reached at runtime. " +
                         "This should not happen. The contents of JceSecurity.verificationResults " +
@@ -547,6 +627,37 @@ final class Target_sun_security_jca_ProviderConfig_ProviderLoader {
     @Alias//
     @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.NewInstance, isFinal = true)//
     static Target_sun_security_jca_ProviderConfig_ProviderLoader INSTANCE;
+}
+
+/**
+ * This only applies to JDK8 and JDK11. Experimental FIPS mode in the SunJSSE Provider was removed
+ * in JDK-8217835. Going forward it is recommended to configure FIPS 140 compliant cryptography
+ * providers by using the usual JCA providers configuration mechanism.
+ */
+@SuppressWarnings("unused")
+@TargetClass(value = sun.security.ssl.SunJSSE.class, onlyWith = JDK11OrEarlier.class)
+final class Target_sun_security_ssl_SunJSSE {
+
+    @Substitute
+    private Target_sun_security_ssl_SunJSSE(java.security.Provider cryptoProvider, String providerName) {
+        throw VMError.unsupportedFeature("Experimental FIPS mode in the SunJSSE Provider is deprecated (JDK-8217835)." +
+                        " To register a FIPS provider use the supported java.security.Security.addProvider() API.");
+    }
+}
+
+@TargetClass(className = "sun.security.jca.Providers")
+final class Target_sun_security_jca_Providers {
+    @Alias//
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = ProviderListTransformer.class, disableCaching = true)//
+    private static ProviderList providerList;
+
+    private static class ProviderListTransformer implements RecomputeFieldValue.CustomFieldValueTransformer {
+        @Override
+        public Object transform(MetaAccessProvider metaAccess, ResolvedJavaField original, ResolvedJavaField annotated, Object receiver, Object originalValue) {
+            ProviderList originalProviderList = (ProviderList) originalValue;
+            return SecurityProvidersFilter.instance().cleanUnregisteredProviders(originalProviderList);
+        }
+    }
 }
 
 /** Dummy class to have a class with the file's name. */

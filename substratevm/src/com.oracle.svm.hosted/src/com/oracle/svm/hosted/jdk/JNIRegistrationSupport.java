@@ -80,6 +80,7 @@ class JNIRegistrationSupport extends JNIRegistrationUtil implements GraalFeature
 
     private final ConcurrentMap<String, Boolean> registeredLibraries = new ConcurrentHashMap<>();
     private NativeLibraries nativeLibraries = null;
+    private boolean isSunMSCAPIProviderReachable = false;
 
     public static JNIRegistrationSupport singleton() {
         return ImageSingletons.lookup(JNIRegistrationSupport.class);
@@ -88,6 +89,13 @@ class JNIRegistrationSupport extends JNIRegistrationUtil implements GraalFeature
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
         nativeLibraries = ((BeforeAnalysisAccessImpl) access).getNativeLibraries();
+    }
+
+    @Override
+    public void afterAnalysis(AfterAnalysisAccess access) {
+        if (isWindows()) {
+            isSunMSCAPIProviderReachable = access.isReachable(clazz(access, "sun.security.mscapi.SunMSCAPI"));
+        }
     }
 
     @Override
@@ -106,21 +114,24 @@ class JNIRegistrationSupport extends JNIRegistrationUtil implements GraalFeature
                  * String arguments.
                  */
                 if (libnameNode.isConstant()) {
-                    String libname = (String) SubstrateObjectConstant.asObject(libnameNode.asConstant());
-                    if (libname != null && registeredLibraries.putIfAbsent(libname, Boolean.TRUE) != Boolean.TRUE) {
-                        /*
-                         * If a library is in our list of static standard libraries, add the library
-                         * to the linker command.
-                         */
-                        if (NativeLibrarySupport.singleton().isPreregisteredBuiltinLibrary(libname)) {
-                            nativeLibraries.addStaticJniLibrary(libname);
-                        }
-                    }
+                    registerLibrary((String) SubstrateObjectConstant.asObject(libnameNode.asConstant()));
                 }
                 /* We never want to do any actual intrinsification, process the original invoke. */
                 return false;
             }
         });
+    }
+
+    void registerLibrary(String libname) {
+        if (libname != null && registeredLibraries.putIfAbsent(libname, Boolean.TRUE) == null) {
+            /*
+             * If a library is in our list of static standard libraries, add the library to the
+             * linker command.
+             */
+            if (NativeLibrarySupport.singleton().isPreregisteredBuiltinLibrary(libname)) {
+                nativeLibraries.addStaticJniLibrary(libname);
+            }
+        }
     }
 
     boolean isRegisteredLibrary(String libname) {
@@ -183,10 +194,10 @@ class JNIRegistrationSupport extends JNIRegistrationUtil implements GraalFeature
                     continue;
                 }
 
-                if (libname.equals("sunec")) {
+                if (libname.equals("sunmscapi") && !isSunMSCAPIProviderReachable) {
                     /*
-                     * Ignore `sunec` library if it is not statically linked (we will use `SunEC` in
-                     * mode without full ECC implementation anyway).
+                     * Ignore `sunmscapi` library if `SunMSCAPI` provider is not reachable (it's
+                     * always registered as a workaround in `Target_java_security_Provider`).
                      */
                     debug.log(DebugContext.INFO_LEVEL, "%s: IGNORED", library);
                     continue;

@@ -53,6 +53,8 @@ import org.graalvm.compiler.nodes.memory.address.IndexAddressNode;
 import org.graalvm.compiler.nodes.spi.Replacements;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.replacements.ArraysSubstitutions;
+import org.graalvm.compiler.replacements.StringLatin1Substitutions;
+import org.graalvm.compiler.replacements.StringUTF16Substitutions;
 import org.graalvm.compiler.replacements.TargetGraphBuilderPlugins;
 import org.graalvm.compiler.replacements.nodes.ArrayCompareToNode;
 import org.graalvm.compiler.replacements.nodes.BinaryMathIntrinsicNode;
@@ -71,8 +73,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public class AMD64GraphBuilderPlugins implements TargetGraphBuilderPlugins {
     @Override
-    public void register(Plugins plugins, Replacements replacements, Architecture architecture, boolean explicitUnsafeNullChecks, boolean registerForeignCallMath, boolean useFMAIntrinsics,
-                    OptionValues options) {
+    public void register(Plugins plugins, Replacements replacements, Architecture architecture, boolean registerForeignCallMath, boolean useFMAIntrinsics, OptionValues options) {
         register(plugins, replacements, (AMD64) architecture, useFMAIntrinsics, options);
     }
 
@@ -229,16 +230,19 @@ public class AMD64GraphBuilderPlugins implements TargetGraphBuilderPlugins {
 
         @Override
         public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode value, ValueNode other) {
-            ValueNode valueLength = b.add(new ArrayLengthNode(value));
-            ValueNode otherLength = b.add(new ArrayLengthNode(other));
+            ValueNode nonNullValue = b.nullCheckedValue(value);
+            ValueNode nonNullOther = b.nullCheckedValue(other);
+
+            ValueNode valueLength = b.add(new ArrayLengthNode(nonNullValue));
+            ValueNode otherLength = b.add(new ArrayLengthNode(nonNullOther));
             if (swapped) {
                 /*
                  * Swapping array arguments because intrinsic expects order to be byte[]/char[] but
                  * kind arguments stay in original order.
                  */
-                b.addPush(JavaKind.Int, new ArrayCompareToNode(other, value, otherLength, valueLength, valueKind, otherKind));
+                b.addPush(JavaKind.Int, new ArrayCompareToNode(nonNullOther, nonNullValue, otherLength, valueLength, valueKind, otherKind));
             } else {
-                b.addPush(JavaKind.Int, new ArrayCompareToNode(value, other, valueLength, otherLength, valueKind, otherKind));
+                b.addPush(JavaKind.Int, new ArrayCompareToNode(nonNullValue, nonNullOther, valueLength, otherLength, valueKind, otherKind));
             }
             return true;
         }
@@ -251,8 +255,8 @@ public class AMD64GraphBuilderPlugins implements TargetGraphBuilderPlugins {
         r.register2("compareToUTF16", byte[].class, byte[].class, new ArrayCompareToPlugin(JavaKind.Byte, JavaKind.Char));
         r.registerMethodSubstitution(AMD64StringLatin1Substitutions.class, "inflate", byte[].class, int.class, char[].class, int.class, int.class);
         r.registerMethodSubstitution(AMD64StringLatin1Substitutions.class, "inflate", byte[].class, int.class, byte[].class, int.class, int.class);
-        r.registerMethodSubstitution(AMD64StringLatin1Substitutions.class, "indexOf", byte[].class, int.class, int.class);
-        r.registerMethodSubstitution(AMD64StringLatin1Substitutions.class, "indexOf", byte[].class, int.class, byte[].class, int.class, int.class);
+        r.registerMethodSubstitution(StringLatin1Substitutions.class, "indexOf", byte[].class, int.class, byte[].class, int.class, int.class);
+        r.registerMethodSubstitution(StringLatin1Substitutions.class, "indexOf", byte[].class, int.class, int.class);
     }
 
     private static void registerStringUTF16Plugins(InvocationPlugins plugins, Replacements replacements) {
@@ -262,10 +266,10 @@ public class AMD64GraphBuilderPlugins implements TargetGraphBuilderPlugins {
         r.register2("compareToLatin1", byte[].class, byte[].class, new ArrayCompareToPlugin(JavaKind.Char, JavaKind.Byte, true));
         r.registerMethodSubstitution(AMD64StringUTF16Substitutions.class, "compress", char[].class, int.class, byte[].class, int.class, int.class);
         r.registerMethodSubstitution(AMD64StringUTF16Substitutions.class, "compress", byte[].class, int.class, byte[].class, int.class, int.class);
-        r.registerMethodSubstitution(AMD64StringUTF16Substitutions.class, "indexOfCharUnsafe", byte[].class, int.class, int.class, int.class);
-        r.registerMethodSubstitution(AMD64StringUTF16Substitutions.class, "indexOfUnsafe", byte[].class, int.class, byte[].class, int.class, int.class);
-        r.registerMethodSubstitution(AMD64StringUTF16Substitutions.class, "indexOfLatin1Unsafe", byte[].class, int.class, byte[].class, int.class, int.class);
-        Registration r2 = new Registration(plugins, AMD64StringUTF16Substitutions.class, replacements);
+        r.registerMethodSubstitution(StringUTF16Substitutions.class, "indexOfUnsafe", byte[].class, int.class, byte[].class, int.class, int.class);
+        r.registerMethodSubstitution(StringUTF16Substitutions.class, "indexOfLatin1Unsafe", byte[].class, int.class, byte[].class, int.class, int.class);
+        r.registerMethodSubstitution(StringUTF16Substitutions.class, "indexOfCharUnsafe", byte[].class, int.class, int.class, int.class);
+        Registration r2 = new Registration(plugins, StringUTF16Substitutions.class, replacements);
         r2.register2("getChar", byte[].class, int.class, new InvocationPlugin() {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode arg1, ValueNode arg2) {

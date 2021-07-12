@@ -25,6 +25,7 @@
 package com.oracle.svm.hosted.code;
 
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
@@ -40,6 +41,11 @@ public class CompilationInfo {
     protected final HostedMethod method;
 
     protected final AtomicBoolean inParseQueue = new AtomicBoolean(false);
+    /**
+     * No need for this flag to be atomic, because {@link CompileQueue#compilations} is used to
+     * ensure each method is compiled only once.
+     */
+    protected boolean inCompileQueue;
 
     protected volatile StructuredGraph graph;
 
@@ -66,10 +72,16 @@ public class CompilationInfo {
     protected CompileFunction customCompileFunction;
 
     /* Statistics collected before/during compilation. */
+    protected long numNodesAfterParsing;
     protected long numNodesBeforeCompilation;
     protected long numNodesAfterCompilation;
     protected long numDeoptEntryPoints;
     protected long numDuringCallEntryPoints;
+
+    /* Statistics collected when method is put into compile queue. */
+    protected final AtomicLong numDirectCalls = new AtomicLong();
+    protected final AtomicLong numVirtualCalls = new AtomicLong();
+    protected final AtomicLong numEntryPointCalls = new AtomicLong();
 
     public CompilationInfo(HostedMethod method) {
         this.method = method;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,8 +26,8 @@ package org.graalvm.compiler.nodes;
 
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
-import org.graalvm.compiler.graph.spi.Canonicalizable;
-import org.graalvm.compiler.graph.spi.CanonicalizerTool;
+import org.graalvm.compiler.nodes.spi.Canonicalizable;
+import org.graalvm.compiler.nodes.spi.CanonicalizerTool;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.extended.GuardingNode;
 import org.graalvm.compiler.nodes.spi.ValueProxy;
@@ -40,12 +40,10 @@ public final class ValueProxyNode extends ProxyNode implements Canonicalizable, 
 
     public static final NodeClass<ValueProxyNode> TYPE = NodeClass.create(ValueProxyNode.class);
     @Input ValueNode value;
-    private final boolean loopPhiProxy;
 
     public ValueProxyNode(ValueNode value, LoopExitNode loopExit) {
         super(TYPE, value.stamp(NodeView.DEFAULT), loopExit);
         this.value = value;
-        loopPhiProxy = loopExit.loopBegin().isPhiAtMerge(value);
     }
 
     @Override
@@ -77,9 +75,6 @@ public final class ValueProxyNode extends ProxyNode implements Canonicalizable, 
 
         ValueNode curValue = value;
         if (curValue.getNodeClass().isLeafNode()) {
-            return curValue;
-        }
-        if (loopPhiProxy && !loopExit.loopBegin().isPhiAtMerge(curValue)) {
             return curValue;
         }
         return this;

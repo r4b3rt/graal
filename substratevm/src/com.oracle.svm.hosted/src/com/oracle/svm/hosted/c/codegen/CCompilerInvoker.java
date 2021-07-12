@@ -42,6 +42,7 @@ import java.util.stream.Collectors;
 
 import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.Platform;
 
 import com.oracle.svm.core.OS;
 import com.oracle.svm.core.SubstrateOptions;
@@ -147,7 +148,12 @@ public abstract class CCompilerInvoker {
                     scanner.next();
                     targetArch = scanner.next();
                 }
-                if (scanner.findInLine("Microsoft.*\\(R\\) C/C\\+\\+") == null) {
+                /*
+                 * Some cl.exe print "... Microsoft (R) C/C++ ... ##.##.#####" while others print
+                 * "...C/C++ ... Microsoft (R) ... ##.##.#####".
+                 */
+                if (scanner.findInLine("Microsoft.*\\(R\\) C/C\\+\\+") == null &&
+                                scanner.findInLine("C/C\\+\\+.*Microsoft.*\\(R\\)") == null) {
                     return null;
                 }
                 scanner.useDelimiter("\\D");
@@ -179,8 +185,9 @@ public abstract class CCompilerInvoker {
                                 JavaVersionUtil.JAVA_SPEC, compilerInfo);
             }
             if (guessArchitecture(compilerInfo.targetArch) != AMD64.class) {
-                UserError.abort("Native-image building on Windows currently only supports target architecture: %s (%s unsupported)",
-                                AMD64.class.getSimpleName(), compilerInfo.targetArch);
+                String targetPrefix = compilerInfo.targetArch.matches("(.*x|i\\d)86$") ? "32-bit architecture " : "";
+                UserError.abort("Native-image building on Windows currently only supports target architecture: %s (%s%s unsupported)",
+                                AMD64.class.getSimpleName(), targetPrefix, compilerInfo.targetArch);
             }
         }
 
@@ -205,7 +212,10 @@ public abstract class CCompilerInvoker {
 
         @Override
         protected String getDefaultCompiler() {
-            return LibCBase.singleton().getTargetCompiler();
+            if (Platform.includedIn(Platform.LINUX.class)) {
+                return LibCBase.singleton().getTargetCompiler();
+            }
+            return "gcc";
         }
 
         @Override
@@ -220,7 +230,7 @@ public abstract class CCompilerInvoker {
                 }
 
                 if (scanner.findInLine("clang version ") != null) {
-                    scanner.useDelimiter("[. ]");
+                    scanner.useDelimiter("[. -]");
                     int major = scanner.nextInt();
                     int minor0 = scanner.nextInt();
                     int minor1 = scanner.nextInt();
@@ -413,6 +423,7 @@ public abstract class CCompilerInvoker {
                 return AArch64.class;
             case "i686":
             case "80x86": /* Windows notation */
+            case "x86":
                 /* Graal does not support 32-bit architectures */
             default:
                 return null;

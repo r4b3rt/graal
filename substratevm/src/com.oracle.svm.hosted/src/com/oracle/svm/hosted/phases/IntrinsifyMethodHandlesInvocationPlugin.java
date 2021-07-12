@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -106,7 +106,7 @@ import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.ParsingReason;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.graal.nodes.DeadEndNode;
+import com.oracle.svm.core.graal.nodes.LoweredDeadEndNode;
 import com.oracle.svm.core.graal.phases.TrustedInterfaceTypePlugin;
 import com.oracle.svm.core.graal.word.SubstrateWordTypes;
 import com.oracle.svm.core.jdk.VarHandleFeature;
@@ -166,9 +166,6 @@ import jdk.vm.ci.meta.ResolvedJavaType;
 public class IntrinsifyMethodHandlesInvocationPlugin implements NodePlugin {
 
     public static class IntrinsificationRegistry extends IntrinsificationPluginRegistry {
-        public static AutoCloseable startThreadLocalnRegistry() {
-            return ImageSingletons.lookup(IntrinsificationRegistry.class).startThreadLocalIntrinsificationRegistry();
-        }
     }
 
     private final ParsingReason reason;
@@ -512,7 +509,7 @@ public class IntrinsifyMethodHandlesInvocationPlugin implements NodePlugin {
          * intrinsified during analysis. Otherwise new code that was not seen as reachable by the
          * static analysis would be compiled.
          */
-        if (reason != ParsingReason.PointsToAnalysis && intrinsificationRegistry.get(b.getCallingContext()) != Boolean.TRUE) {
+        if (reason != ParsingReason.PointsToAnalysis && intrinsificationRegistry.get(b.getMethod(), b.bci()) != Boolean.TRUE) {
             return reportUnsupportedFeature(b, methodHandleMethod);
         }
         Plugins graphBuilderPlugins = new Plugins(parsingProviders.getReplacements().getGraphBuilderPlugins());
@@ -562,7 +559,7 @@ public class IntrinsifyMethodHandlesInvocationPlugin implements NodePlugin {
                      * Successfully intrinsified during analysis, remember that we can intrinsify
                      * when parsing for compilation.
                      */
-                    intrinsificationRegistry.add(b.getCallingContext(), Boolean.TRUE);
+                    intrinsificationRegistry.add(b.getMethod(), b.bci(), Boolean.TRUE);
                 }
                 return true;
             } catch (AbortTransplantException ex) {
@@ -593,16 +590,23 @@ public class IntrinsifyMethodHandlesInvocationPlugin implements NodePlugin {
      * calls, field stores, exceptions, ... look as if they are coming from the original invocation
      * site of the method handle. This means the static analysis is not storing any analysis results
      * for these calls, because lookup of analysis results requires a unique bci.
+     *
+     * During this process, values are not pushed and popped from the frame state as usual. Instead,
+     * at most one value is temporarily pushed onto the frame state's stack. During the generation
+     * process {@link #tempFrameStackValue} is used to represent the value currently temporarily
+     * pushed onto the stack.
      */
     class Transplanter {
         private final BytecodeParser b;
         private final ResolvedJavaMethod methodHandleMethod;
         private final NodeMap<Node> transplanted;
+        private JavaKind tempFrameStackValue;
 
         Transplanter(GraphBuilderContext b, ResolvedJavaMethod methodHandleMethod, NodeMap<Node> transplanted) {
             this.b = (BytecodeParser) b;
             this.methodHandleMethod = methodHandleMethod;
             this.transplanted = transplanted;
+            this.tempFrameStackValue = null;
         }
 
         void graph(StructuredGraph graph) throws AbortTransplantException {
@@ -614,6 +618,7 @@ public class IntrinsifyMethodHandlesInvocationPlugin implements NodePlugin {
 
                 } else if (oNode instanceof ReturnNode) {
                     ReturnNode oReturn = (ReturnNode) oNode;
+                    /* Push the returned result. */
                     if (returnResultKind != JavaKind.Void) {
                         b.push(returnResultKind, node(oReturn.result()));
                     }
@@ -623,6 +628,36 @@ public class IntrinsifyMethodHandlesInvocationPlugin implements NodePlugin {
                 } else {
                     throw bailout();
                 }
+            }
+        }
+
+        /**
+         * @return whether the current frame has enough space for a new value of the given kind to
+         *         be pushed to the stack.
+         */
+        private boolean frameStackHasSpaceForKind(JavaKind javaKind) {
+            return b.getFrameStateBuilder().stackSize() + (javaKind.needsTwoSlots() ? 2 : 1) <= b.getMethod().getMaxStackSize();
+        }
+
+        /**
+         * If space is available, temporarily push {@code value} onto frame's stack.
+         */
+        private void pushToFrameStack(ValueNode value) {
+            JavaKind kind = value.getStackKind();
+            /* Pushing new value if there is space. */
+            if (frameStackHasSpaceForKind(kind)) {
+                b.push(kind, value);
+                tempFrameStackValue = kind;
+            }
+        }
+
+        /*
+         * Remove temp value, if present, from stack.
+         */
+        private void popTempFrameStackValue() {
+            if (tempFrameStackValue != null) {
+                b.pop(tempFrameStackValue);
+                tempFrameStackValue = null;
             }
         }
 
@@ -765,6 +800,20 @@ public class IntrinsifyMethodHandlesInvocationPlugin implements NodePlugin {
 
         private void transplantInvoke(FixedWithNextNode oNode, ResolvedJavaMethod tTargetMethod, InvokeKind invokeKind, ValueNode[] arguments, JavaKind invokeResultKind) {
             maybeEmitClassInitialization(b, invokeKind == InvokeKind.Static, tTargetMethod.getDeclaringClass());
+
+            if (invokeResultKind == JavaKind.Void) {
+                /*
+                 * Invokedynamics can be parsed into a NewInstanceNode & InvokeNode combo. In this
+                 * situation, it is necessary to push the NewInstanceNode onto the stack so that it
+                 * is included in the stateDuring FrameState of the InvokeNode.
+                 */
+                Node pred = oNode.predecessor();
+                if (pred.getClass() == NewInstanceNode.class && transplanted.containsKey(pred)) {
+                    Node tNew = transplanted.get(pred);
+                    pushToFrameStack((ValueNode) tNew);
+                }
+            }
+
             b.handleReplacedInvoke(invokeKind, tTargetMethod, arguments, false);
 
             if (invokeResultKind != JavaKind.Void) {
@@ -774,6 +823,8 @@ public class IntrinsifyMethodHandlesInvocationPlugin implements NodePlugin {
                  * intrinsification can happen.
                  */
                 transplanted.put(oNode, b.pop(invokeResultKind));
+            } else {
+                popTempFrameStackValue();
             }
         }
 
@@ -853,7 +904,7 @@ public class IntrinsifyMethodHandlesInvocationPlugin implements NodePlugin {
             b.handleReplacedInvoke(InvokeKind.Static, b.getMetaAccess().lookupJavaMethod(unsupportedFeatureMethod),
                             new ValueNode[]{ConstantNode.forConstant(SubstrateObjectConstant.forObject(message), b.getMetaAccess(), b.getGraph())}, false);
             /* The invoked method throws an exception and therefore never returns. */
-            b.append(new DeadEndNode());
+            b.append(new LoweredDeadEndNode());
             return true;
 
         } else {

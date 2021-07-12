@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -344,6 +344,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
 
     @Override
     public boolean executeRepeating(VirtualFrame frame) {
+        CompilerDirectives.transferToInterpreter();
         throw WasmException.create(Failure.UNSPECIFIED_INTERNAL, this, "This method should never have been called.");
     }
 
@@ -354,6 +355,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
         try {
             stacklocals = (long[]) frame.getObject(codeEntry.stackLocalsSlot());
         } catch (FrameSlotTypeException e) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.UNSPECIFIED_INTERNAL, this, "Invalid object type in the stack slot.");
         }
         return execute(contextReference().get(), frame, stacklocals);
@@ -383,14 +385,16 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
         check(intConstants.length, (1 << 31) - 1);
         check(profileCounters.length, (1 << 31) - 1);
         check(stacklocals.length, (1 << 31) - 1);
+        int opcode = UNREACHABLE;
         try {
             while (offset < offsetLimit) {
                 byte byteOpcode = BinaryStreamParser.rawPeek1(data, offset);
-                int opcode = byteOpcode & 0xFF;
+                opcode = byteOpcode & 0xFF;
                 offset++;
                 CompilerAsserts.partialEvaluationConstant(offset);
                 switch (opcode) {
                     case UNREACHABLE:
+                        CompilerDirectives.transferToInterpreter();
                         throw WasmException.create(Failure.UNREACHABLE, this);
                     case NOP:
                         break;
@@ -538,6 +542,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
                                 return unwindCounter;
                             }
                         }
+                        CompilerDirectives.transferToInterpreter();
                         throw WasmException.create(Failure.UNSPECIFIED_INTERNAL, this, "Should not reach here");
                     }
                     case RETURN: {
@@ -565,6 +570,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
 
                         WasmFunction function = instance().symbolTable().function(functionIndex);
                         byte returnType = function.returnType();
+                        CompilerAsserts.partialEvaluationConstant(returnType);
                         int numArgs = function.numArguments();
 
                         Object[] args = createArgumentsForCall(stacklocals, function.typeIndex(), numArgs, stackPointer);
@@ -602,6 +608,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
                                 break;
                             }
                             default: {
+                                CompilerDirectives.transferToInterpreter();
                                 throw formatException("Unknown return type: %d", returnType);
                             }
                         }
@@ -616,21 +623,26 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
                         final Object[] elements = table.elements();
                         final int elementIndex = popInt(stacklocals, stackPointer);
                         if (elementIndex < 0 || elementIndex >= elements.length) {
+                            CompilerDirectives.transferToInterpreter();
                             throw WasmException.format(Failure.UNDEFINED_ELEMENT, this, "Element index '%d' out of table bounds.", elementIndex);
                         }
                         // Currently, table elements may only be functions.
                         // We can add a check here when this changes in the future.
                         final Object element = elements[elementIndex];
                         if (element == null) {
+                            CompilerDirectives.transferToInterpreter();
                             throw WasmException.format(Failure.UNINITIALIZED_ELEMENT, this, "Table element at index %d is uninitialized.", elementIndex);
                         }
                         final WasmFunction function;
                         final CallTarget target;
+                        final WasmContext.Uid functionInstanceContextUid;
                         if (element instanceof WasmFunctionInstance) {
                             final WasmFunctionInstance functionInstance = (WasmFunctionInstance) element;
                             function = functionInstance.function();
                             target = functionInstance.target();
+                            functionInstanceContextUid = functionInstance.contextUid();
                         } else {
+                            CompilerDirectives.transferToInterpreter();
                             throw WasmException.format(Failure.UNSPECIFIED_TRAP, this, "Unknown table element type: %s", element);
                         }
 
@@ -649,10 +661,21 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
                         offset += 1;
 
                         // Validate that the function type matches the expected type.
-                        if (function != null && expectedTypeEquivalenceClass != function.typeEquivalenceClass()) {
-                            throw WasmException.format(Failure.INDIRECT_CALL_TYPE__MISMATCH, this,
-                                            "Actual (type %d of function %s) and expected (type %d in module %s) types differ in the indirect call.",
-                                            function.typeIndex(), function.name(), expectedFunctionTypeIndex, instance().name());
+                        if (functionInstanceContextUid == context.uid()) {
+                            // We can do a quick equivalence-class check.
+                            if (expectedTypeEquivalenceClass != function.typeEquivalenceClass()) {
+                                CompilerDirectives.transferToInterpreter();
+                                failFunctionTypeCheck(function, expectedFunctionTypeIndex);
+                            }
+                        } else {
+                            // The table is coming from a different context, so do a slow check.
+                            // If the Wasm function is set to null, then the check must be performed
+                            // in the body of the function. This is done when the function is
+                            // provided externally (e.g. comes from a different language).
+                            if (function != null && !function.type().equals(symtab.typeAt(expectedFunctionTypeIndex))) {
+                                CompilerDirectives.transferToInterpreter();
+                                failFunctionTypeCheck(function, expectedFunctionTypeIndex);
+                            }
                         }
 
                         // Invoke the resolved function.
@@ -667,6 +690,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
                         // As per the WebAssembly specification, this restriction may be lifted in
                         // the future.
                         byte returnType = instance().symbolTable().functionTypeReturnType(expectedFunctionTypeIndex);
+                        CompilerAsserts.partialEvaluationConstant(returnType);
                         switch (returnType) {
                             case WasmType.I32_TYPE: {
                                 pushInt(stacklocals, stackPointer, (int) result);
@@ -693,6 +717,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
                                 break;
                             }
                             default: {
+                                CompilerDirectives.transferToInterpreter();
                                 throw formatException("Unknown return type: %d", returnType);
                             }
                         }
@@ -786,6 +811,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
                         try {
                             address = addExactUnsigned(memOffset, baseAddress);
                         } catch (ArithmeticException e) {
+                            CompilerDirectives.transferToInterpreter();
                             throw WasmException.create(Failure.OUT_OF_BOUNDS_MEMORY_ACCESS, this);
                         }
 
@@ -1368,15 +1394,28 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
                 }
             }
         } catch (ArithmeticException e) {
-            throw WasmException.fromArithmeticException(this, e);
+            CompilerDirectives.transferToInterpreter();
+            if (opcode == I32_DIV_S || opcode == I32_DIV_U || opcode == I32_REM_S || opcode == I32_REM_U || opcode == I64_DIV_S || opcode == I64_DIV_U || opcode == I64_REM_S || opcode == I64_REM_U) {
+                throw WasmException.create(Failure.INT_DIVIDE_BY_ZERO, this);
+            } else {
+                throw e;
+            }
         }
         return -1;
+    }
+
+    @TruffleBoundary
+    private void failFunctionTypeCheck(WasmFunction function, int expectedFunctionTypeIndex) {
+        throw WasmException.format(Failure.INDIRECT_CALL_TYPE__MISMATCH, this,
+                        "Actual (type %d of function %s) and expected (type %d in module %s) types differ in the indirect call.",
+                        function.typeIndex(), function.name(), expectedFunctionTypeIndex, instance().name());
     }
 
     @SuppressWarnings("unused")
     private void check(int v, int limit) {
         // This is a temporary hack to hoist values out of the loop.
         if (v >= limit) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.UNSPECIFIED_INTERNAL, this, "array length too large");
         }
     }
@@ -1406,6 +1445,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
         try {
             address = addExactUnsigned(memOffset, baseAddress);
         } catch (ArithmeticException e) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.OUT_OF_BOUNDS_MEMORY_ACCESS, this);
         }
 
@@ -1491,6 +1531,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
         try {
             address = addExactUnsigned(memOffset, baseAddress);
         } catch (ArithmeticException e) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.OUT_OF_BOUNDS_MEMORY_ACCESS, this);
         }
 
@@ -1549,6 +1590,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
 
     private void global_set(WasmContext context, long[] stack, int stackPointer, int index) {
         byte type = instance().symbolTable().globalValueType(index);
+        CompilerAsserts.partialEvaluationConstant(type);
         // For global.set, we don't need to make sure that the referenced global is
         // mutable.
         // This is taken care of by validation during wat to wasm compilation.
@@ -1578,6 +1620,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
                 break;
             }
             default: {
+                CompilerDirectives.transferToInterpreter();
                 throw WasmException.create(Failure.UNSPECIFIED_TRAP, this, "Local variable cannot have the void type.");
             }
         }
@@ -1585,6 +1628,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
 
     private void global_get(WasmContext context, long[] stack, int stackPointer, int index) {
         byte type = instance().symbolTable().globalValueType(index);
+        CompilerAsserts.partialEvaluationConstant(type);
         switch (type) {
             case WasmType.I32_TYPE: {
                 int address = instance().globalAddress(index);
@@ -1600,17 +1644,18 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
             }
             case WasmType.F32_TYPE: {
                 int address = instance().globalAddress(index);
-                int value = context.globals().loadAsInt(address);
+                int value = context.globals().loadFloatAsInt(address);
                 pushInt(stack, stackPointer, value);
                 break;
             }
             case WasmType.F64_TYPE: {
                 int address = instance().globalAddress(index);
-                long value = context.globals().loadAsLong(address);
+                long value = context.globals().loadDoubleAsLong(address);
                 push(stack, stackPointer, value);
                 break;
             }
             default: {
+                CompilerDirectives.transferToInterpreter();
                 throw WasmException.create(Failure.UNSPECIFIED_TRAP, this, "Local variable cannot have the void type.");
             }
         }
@@ -2254,6 +2299,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
         int x = popInt(stack, stackPointer - 1);
         int y = popInt(stack, stackPointer - 2);
         if (x == -1 && y == Integer.MIN_VALUE) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INT_OVERFLOW, this);
         }
         int result = y / x;
@@ -2380,6 +2426,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
         long x = pop(stack, stackPointer - 1);
         long y = pop(stack, stackPointer - 2);
         if (x == -1 && y == Long.MIN_VALUE) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INT_OVERFLOW, this);
         }
         final long result = y / x;
@@ -2654,8 +2701,10 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
     private void i32_trunc_f32_s(long[] stack, int stackPointer) {
         final float x = popAsFloat(stack, stackPointer - 1);
         if (Float.isNaN(x)) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INVALID_CONVERSION_TO_INT);
         } else if (x < MIN_FLOAT_TRUNCATABLE_TO_INT || x > MAX_FLOAT_TRUNCATABLE_TO_INT) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INT_OVERFLOW);
         }
         final int result = (int) WasmMath.truncFloatToLong(x);
@@ -2665,8 +2714,10 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
     private void i32_trunc_f32_u(long[] stack, int stackPointer) {
         final float x = popAsFloat(stack, stackPointer - 1);
         if (Float.isNaN(x)) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INVALID_CONVERSION_TO_INT);
         } else if (x < MIN_FLOAT_TRUNCATABLE_TO_U_INT || x > MAX_FLOAT_TRUNCATABLE_TO_U_INT) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INT_OVERFLOW);
         }
         final int result = (int) WasmMath.truncFloatToUnsignedLong(x);
@@ -2676,8 +2727,10 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
     private void i32_trunc_f64_s(long[] stack, int stackPointer) {
         final double x = popAsDouble(stack, stackPointer - 1);
         if (Double.isNaN(x)) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INVALID_CONVERSION_TO_INT);
         } else if (x < MIN_DOUBLE_TRUNCATABLE_TO_INT || x > MAX_DOUBLE_TRUNCATABLE_TO_INT) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INT_OVERFLOW);
         }
         final int result = (int) WasmMath.truncDoubleToLong(x);
@@ -2687,8 +2740,10 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
     private void i32_trunc_f64_u(long[] stack, int stackPointer) {
         final double x = popAsDouble(stack, stackPointer - 1);
         if (Double.isNaN(x)) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INVALID_CONVERSION_TO_INT);
         } else if (x < MIN_DOUBLE_TRUNCATABLE_TO_U_INT || x > MAX_DOUBLE_TRUNCATABLE_TO_U_INT) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INT_OVERFLOW);
         }
         final int result = (int) WasmMath.truncDoubleToUnsignedLong(x);
@@ -2710,8 +2765,10 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
     private void i64_trunc_f32_s(long[] stack, int stackPointer) {
         final float x = popAsFloat(stack, stackPointer - 1);
         if (Float.isNaN(x)) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INVALID_CONVERSION_TO_INT);
         } else if (x < MIN_FLOAT_TRUNCATABLE_TO_LONG || x > MAX_FLOAT_TRUNCATABLE_TO_LONG) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INT_OVERFLOW);
         }
         final long result = WasmMath.truncFloatToLong(x);
@@ -2721,8 +2778,10 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
     private void i64_trunc_f32_u(long[] stack, int stackPointer) {
         final float x = popAsFloat(stack, stackPointer - 1);
         if (Float.isNaN(x)) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INVALID_CONVERSION_TO_INT);
         } else if (x < MIN_FLOAT_TRUNCATABLE_TO_U_LONG || x > MAX_FLOAT_TRUNCATABLE_TO_U_LONG) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INT_OVERFLOW);
         }
         final long result = WasmMath.truncFloatToUnsignedLong(x);
@@ -2732,8 +2791,10 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
     private void i64_trunc_f64_s(long[] stack, int stackPointer) {
         final double x = popAsDouble(stack, stackPointer - 1);
         if (Double.isNaN(x)) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INVALID_CONVERSION_TO_INT);
         } else if (x < MIN_DOUBLE_TRUNCATABLE_TO_LONG || x > MAX_DOUBLE_TRUNCATABLE_TO_LONG) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INT_OVERFLOW);
         }
         final long result = WasmMath.truncDoubleToLong(x);
@@ -2743,8 +2804,10 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
     private void i64_trunc_f64_u(long[] stack, int stackPointer) {
         final double x = popAsDouble(stack, stackPointer - 1);
         if (Double.isNaN(x)) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INVALID_CONVERSION_TO_INT);
         } else if (x < MIN_DOUBLE_TRUNCATABLE_TO_U_LONG || x > MAX_DOUBLE_TRUNCATABLE_TO_U_LONG) {
+            CompilerDirectives.transferToInterpreter();
             throw WasmException.create(Failure.INT_OVERFLOW);
         }
         final long result = WasmMath.truncDoubleToUnsignedLong(x);
@@ -2833,6 +2896,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
         for (int i = numArgs - 1; i >= 0; --i) {
             stackPointer--;
             byte type = instance().symbolTable().functionTypeArgumentTypeAt(functionTypeIndex, i);
+            CompilerAsserts.partialEvaluationConstant(type);
             switch (type) {
                 case WasmType.I32_TYPE:
                     args[i] = popInt(stack, stackPointer);
@@ -2847,6 +2911,7 @@ public final class WasmBlockNode extends WasmNode implements RepeatingNode {
                     args[i] = popAsDouble(stack, stackPointer);
                     break;
                 default: {
+                    CompilerDirectives.transferToInterpreter();
                     throw formatException("Unknown type: %d", type);
                 }
             }
