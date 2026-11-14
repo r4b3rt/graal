@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -273,6 +273,19 @@ public class ProxyAPITest {
             assertEquals(2, proxy.executeCounter);
         }
         assertValue(value, Trait.PROXY_OBJECT, Trait.EXECUTABLE);
+    }
+
+    @Test
+    public void testProxyExecutableException() {
+        Value executable = context.asValue(new ProxyExecutable() {
+            @Override
+            public Object execute(Value... arguments) {
+                throw new UnsupportedOperationException();
+            }
+        });
+        PolyglotException exception = Assert.assertThrows(PolyglotException.class, () -> executable.execute());
+        assertTrue(exception.isHostException());
+        assertTrue(exception.asHostException() instanceof UnsupportedOperationException);
     }
 
     static class ProxyInstantiableTest implements ProxyInstantiable {

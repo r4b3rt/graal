@@ -28,13 +28,15 @@ import org.graalvm.nativeimage.c.CContext;
 import org.graalvm.nativeimage.c.constant.CConstant;
 import org.graalvm.nativeimage.c.function.CFunction;
 import org.graalvm.nativeimage.c.function.CFunction.Transition;
+import org.graalvm.nativeimage.c.struct.CField;
 import org.graalvm.nativeimage.c.struct.CPointerTo;
-import org.graalvm.nativeimage.c.type.CCharPointer;
+import org.graalvm.nativeimage.c.struct.CStruct;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.nativeimage.c.type.CLongPointer;
+import org.graalvm.nativeimage.c.type.VoidPointer;
 import org.graalvm.word.PointerBase;
 
-import com.oracle.svm.core.windows.headers.LibC.WCharPointer;
+import com.oracle.svm.core.windows.headers.WindowsLibC.WCharPointer;
 
 // Checkstyle: stop
 
@@ -50,9 +52,14 @@ public class WinBase {
     public interface HANDLE extends PointerBase {
     }
 
+    @CConstant
+    public static native HANDLE INVALID_HANDLE_VALUE();
+
     @CPointerTo(nameOfCType = "HANDLE")
     public interface LPHANDLE extends PointerBase {
         HANDLE read();
+
+        void write(HANDLE value);
     }
 
     /**
@@ -63,9 +70,22 @@ public class WinBase {
 
     @CPointerTo(nameOfCType = "HMODULE")
     public interface HMODULEPointer extends PointerBase {
-        public HMODULE read();
+        HMODULE read();
 
-        public void write(HMODULE value);
+        void write(HMODULE value);
+    }
+
+    /**
+     * Contains a 64-bit value representing the number of 100-nanosecond intervals since January 1,
+     * 1601 (UTC).
+     */
+    @CStruct
+    public interface FILETIME extends PointerBase {
+        @CField
+        int dwLowDateTime();
+
+        @CField
+        int dwHighDateTime();
     }
 
     /**
@@ -77,18 +97,20 @@ public class WinBase {
     @CConstant
     public static native int ERROR_TIMEOUT();
 
+    @CConstant
+    public static native int ERROR_SUCCESS();
+
     /**
      * QueryPerformance Counter - used for elapsed time
      */
-
     @CFunction(transition = Transition.NO_TRANSITION)
-    public static native void QueryPerformanceCounter(CLongPointer counter);
+    public static native int QueryPerformanceCounter(CLongPointer counter);
 
     /**
      * QueryPerformance Frequency - used for elapsed time
      */
     @CFunction(transition = Transition.NO_TRANSITION)
-    public static native void QueryPerformanceFrequency(CLongPointer counter);
+    public static native int QueryPerformanceFrequency(CLongPointer counter);
 
     /**
      * CloseHandle
@@ -100,60 +122,6 @@ public class WinBase {
     public static native int DuplicateHandle(HANDLE hSourceProcessHandle, HANDLE hSourceHandle, HANDLE hTargetProcessHandle, LPHANDLE lpTargetHandle, int dwDesiredAccess, boolean bInheritHandle,
                     int dwOptions);
 
-    /**
-     * GetModuleHandle
-     */
-    @CFunction(transition = Transition.NO_TRANSITION)
-    public static native HMODULE GetModuleHandleA(PointerBase lpModuleName);
-
-    /**
-     * GetModuleFileNameA
-     */
-    @CFunction(transition = Transition.NO_TRANSITION)
-    public static native int GetModuleFileNameA(HMODULE hModule, CCharPointer lpFilename, int nSize);
-
-    @CConstant
-    public static native int GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS();
-
-    @CConstant
-    public static native int GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT();
-
-    /**
-     * GetModuleHandleExA
-     */
-    @CFunction(transition = Transition.NO_TRANSITION)
-    public static native boolean GetModuleHandleExA(int flags, PointerBase lpModuleName, HMODULEPointer module);
-
-    /**
-     * GetProcAddress
-     */
-    @CFunction(transition = Transition.NO_TRANSITION)
-    public static native PointerBase GetProcAddress(HMODULE hModule, PointerBase lpProcName);
-
-    /**
-     * LoadLibraryA
-     */
-    @CFunction(transition = Transition.NO_TRANSITION)
-    public static native HMODULE LoadLibraryA(PointerBase lpFileName);
-
-    /**
-     * LoadLibraryExA
-     */
-    @CFunction(transition = Transition.NO_TRANSITION)
-    public static native HMODULE LoadLibraryExA(PointerBase lpFileName, int dummy, int flags);
-
-    /**
-     * FreeLibrary
-     */
-    @CFunction(transition = Transition.NO_TRANSITION)
-    public static native void FreeLibrary(PointerBase pointer);
-
-    /**
-     * SetDllDirectoryA
-     */
-    @CFunction(transition = Transition.NO_TRANSITION)
-    public static native boolean SetDllDirectoryA(PointerBase lpPathName);
-
     @CFunction(transition = Transition.NO_TRANSITION)
     public static native int GetCurrentDirectoryW(int nBufferLength, WCharPointer lpBuffer);
 
@@ -162,4 +130,8 @@ public class WinBase {
 
     @CFunction(transition = Transition.NO_TRANSITION)
     public static native int GetUserProfileDirectoryW(HANDLE hToken, WCharPointer lpProfileDir, CIntPointer lpcchSize);
+
+    @CFunction(transition = Transition.NO_TRANSITION)
+    public static native WinBase.HANDLE CreateSemaphoreA(VoidPointer lpSemaphoreAttributes, int lInitialCount, int lMaximumCount, VoidPointer lpName);
+
 }

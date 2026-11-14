@@ -1,3 +1,5 @@
-DYNAMIC_IMPORTS=/substratevm,/tools,/graal-nodejs
-EXCLUDE_COMPONENTS=nju,nic,ni,nil,llp,dis,pbm
-FORCE_BASH_LAUNCHERS=polyglot,polybench
+# Same as ce
+DYNAMIC_IMPORTS=/sdk,/truffle,/compiler,/substratevm
+COMPONENTS=cmp,gvm,lg,ni,nic,nil,sdkni,svm,svmjdwp,svmt,svmsl,tflc,tflsm
+NATIVE_IMAGES=lib:jvmcicompiler,lib:native-image-agent,lib:native-image-diagnostics-agent,native-image
+NON_REBUILDABLE_IMAGES=lib:jvmcicompiler

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,10 +40,11 @@
  */
 package com.oracle.truffle.nfi;
 
-import com.oracle.truffle.nfi.SignatureRootNode.BuildSignatureNode;
-import com.oracle.truffle.nfi.spi.types.NativeLibraryDescriptor;
 import java.util.ArrayList;
 import java.util.List;
+
+import com.oracle.truffle.nfi.SignatureRootNode.BuildSignatureNode;
+import com.oracle.truffle.nfi.backend.spi.types.NativeLibraryDescriptor;
 
 /**
  * Parsed representation of a Truffle NFI source. To use the Truffle NFI, evaluate a source with the
@@ -91,7 +92,7 @@ final class NativeSource {
         private final NativeLibraryDescriptor libraryDescriptor;
 
         private final List<String> preBoundSymbols;
-        private final List<String> preBoundSignatures;
+        private final List<BuildSignatureNode> preBoundSignatures;
 
         ParsedLibrary(NativeLibraryDescriptor libraryDescriptor) {
             this.libraryDescriptor = libraryDescriptor;
@@ -111,11 +112,11 @@ final class NativeSource {
             return preBoundSymbols.get(i);
         }
 
-        public String getPreBoundSignature(int i) {
+        public BuildSignatureNode getPreBoundSignature(int i) {
             return preBoundSignatures.get(i);
         }
 
-        void register(String symbol, String signature) {
+        void register(String symbol, BuildSignatureNode signature) {
             preBoundSymbols.add(symbol);
             preBoundSignatures.add(signature);
         }

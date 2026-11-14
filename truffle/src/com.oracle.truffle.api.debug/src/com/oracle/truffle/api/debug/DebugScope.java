@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -214,63 +214,6 @@ public final class DebugScope {
     }
 
     /**
-     * Get arguments of this scope. If this scope is a {@link #isFunctionScope() function} scope,
-     * function arguments are returned.
-     * <p>
-     * This method is not thread-safe and will throw an {@link IllegalStateException} if called on
-     * another thread than it was created with.
-     *
-     * @return an iterable of arguments, or <code>null</code> when this scope does not have a
-     *         concept of arguments.
-     * @throws DebugException when guest language code throws an exception
-     * @since 0.26
-     * @deprecated since 20.3 Use {@link #getDeclaredValues()} on the {@link SourceElement#ROOT}.
-     */
-    @Deprecated
-    public Iterable<DebugValue> getArguments() throws DebugException {
-        verifyValidState();
-        if (node == null) {
-            return null;
-        }
-        try {
-            Node argNode = node;
-            while (argNode != null && (!(argNode instanceof InstrumentableNode) || !((InstrumentableNode) argNode).hasTag(StandardTags.RootTag.class))) {
-                argNode = argNode.getParent();
-            }
-            if (argNode == null || !NODE.hasScope(argNode, frame)) {
-                return null;
-            }
-            Object argumentsObj;
-            try {
-                argumentsObj = NODE.getScope(argNode, frame, true);
-                if (INTEROP.hasScopeParent(argumentsObj)) {
-                    argumentsObj = new SubtractedVariables(argumentsObj, INTEROP.getScopeParent(argumentsObj));
-                }
-            } catch (UnsupportedMessageException e) {
-                return null;
-            }
-            if (argumentsObj != null) {
-                String receiverName = null;
-                if (NODE.hasReceiverMember(argNode, frame)) {
-                    receiverName = INTEROP.asString(NODE.getReceiverMember(argNode, frame));
-                }
-                ValuePropertiesCollection properties = DebugValue.getProperties(argumentsObj, receiverName, session, getLanguage(), this);
-                if (properties != null) {
-                    return properties;
-                }
-                if (ValueInteropList.INTEROP.hasArrayElements(argumentsObj)) {
-                    return new ValueInteropList(session, getLanguage(), argumentsObj);
-                }
-            }
-        } catch (ThreadDeath td) {
-            throw td;
-        } catch (Throwable ex) {
-            throw DebugException.create(session, ex, language);
-        }
-        return null;
-    }
-
-    /**
      * Get value that represents the receiver object of this scope. The receiver object is
      * represented as <code>this</code> in Java or JavaScript and <code>self</code> in Ruby, for
      * instance.
@@ -291,11 +234,10 @@ public final class DebugScope {
                 return null;
             }
             String name = INTEROP.asString(NODE.getReceiverMember(node, frame));
-            if (!INTEROP.isMemberReadable(scope, name)) {
+            if (!INTEROP.isMemberReadable(scope, name) || !isDeclaredInScope(name)) {
                 return null;
             }
-            Object receiver = INTEROP.readMember(scope, name);
-            receiverValue = new DebugValue.HeapValue(session, getLanguage(), name, receiver);
+            receiverValue = new DebugValue.ObjectMemberValue(session, getLanguage(), this, scope, name);
         } catch (ThreadDeath td) {
             throw td;
         } catch (Throwable ex) {
@@ -402,6 +344,21 @@ public final class DebugScope {
         return variables;
     }
 
+    private boolean isDeclaredInScope(String name) {
+        Object scopeParent = null;
+        if (INTEROP.hasScopeParent(scope)) {
+            try {
+                scopeParent = INTEROP.getScopeParent(scope);
+            } catch (UnsupportedMessageException ex) {
+                throw CompilerDirectives.shouldNotReachHere(ex);
+            }
+        }
+        if (scopeParent == null) {
+            return true;
+        }
+        return new SubtractedVariables(scope, scopeParent).isMemberReadable(name);
+    }
+
     /**
      * Converts the value to a DebugValue, or returns <code>null</code> if the requesting language
      * class does not match the root node guest language.
@@ -429,7 +386,7 @@ public final class DebugScope {
             return null;
         }
         // make sure rawValue is a valid Interop value
-        if (!Debugger.ACCESSOR.interopSupport().isInteropType(rawValue)) {
+        if (!InteropLibrary.isValidValue(rawValue)) {
             throw new IllegalArgumentException("raw value is not an Interop value");
         }
         // check if language class of the root node corresponds to the input language

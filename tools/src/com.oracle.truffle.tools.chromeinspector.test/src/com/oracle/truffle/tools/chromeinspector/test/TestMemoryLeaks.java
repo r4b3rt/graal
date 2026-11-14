@@ -42,7 +42,8 @@ public class TestMemoryLeaks {
 
     @Test
     public void testRemoteObjectsLeak() throws Exception {
-        InspectorTester tester = InspectorTester.start(false);
+        // The AST and Bytecode DSL interpreters diverge in their approach to scopes.
+        InspectorTester tester = InspectorTester.start(false, false, false, Map.of("sl.UseBytecode", "false"));
         RemoteObjectsHandler remoteObjectsHandler = tester.getInspectorContext().getRemoteObjectsHandler();
         assertEmptyRemoteObjectsMaps(remoteObjectsHandler);
 
@@ -68,9 +69,11 @@ public class TestMemoryLeaks {
         tester.sendMessage("{\"id\":1,\"method\":\"Runtime.enable\"}");
         tester.sendMessage("{\"id\":2,\"method\":\"Debugger.enable\"}");
         tester.sendMessage("{\"id\":3,\"method\":\"Runtime.runIfWaitingForDebugger\"}");
+        assertTrue(tester.compareReceivedMessages(
+                        "{\"result\":{},\"id\":1}\n"));
+        tester.receiveMessages(
+                        "{\"result\":{\"debuggerId\":\"UniqueDebuggerId.", "},\"id\":2}\n");
         assertTrue(tester.compareReceivedMessages("" +
-                        "{\"result\":{},\"id\":1}\n" +
-                        "{\"result\":{},\"id\":2}\n" +
                         "{\"result\":{},\"id\":3}\n" +
                         "{\"method\":\"Runtime.executionContextCreated\",\"params\":{\"context\":{\"origin\":\"\",\"name\":\"test\",\"id\":1}}}\n"));
         tester.eval(source);
@@ -97,7 +100,7 @@ public class TestMemoryLeaks {
         tester.receiveMessages(
                         "{\"method\":\"Debugger.paused\"",
                         "\"url\":\"" + slTestURI + "\"}]}}\n");
-        tester.sendMessage("{\"id\":15,\"method\":\"Runtime.getProperties\",\"params\":{\"objectId\":\"8\"}}");
+        tester.sendMessage("{\"id\":15,\"method\":\"Runtime.getProperties\",\"params\":{\"objectId\":\"6\"}}");
         tester.receiveMessages(
                         "{\"result\":",
                         "\"name\":\"arg\"",
@@ -115,7 +118,7 @@ public class TestMemoryLeaks {
         tester.receiveMessages(
                         "{\"method\":\"Debugger.paused\"",
                         "\"url\":\"" + slTestURI + "\"}]}}\n");
-        tester.sendMessage("{\"id\":25,\"method\":\"Runtime.getProperties\",\"params\":{\"objectId\":\"16\"}}");
+        tester.sendMessage("{\"id\":25,\"method\":\"Runtime.getProperties\",\"params\":{\"objectId\":\"12\"}}");
         assertTrue(tester.compareReceivedMessages(
                         "{\"result\":{\"result\":[],\"internalProperties\":[]},\"id\":25}\n"));
         assertRemoteObjectsMapsSize(remoteObjectsHandler, 4); // global, func1, func2, func3

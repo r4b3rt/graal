@@ -24,6 +24,9 @@
  */
 package com.oracle.svm.core.posix.headers;
 
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static org.graalvm.nativeimage.c.function.CFunction.Transition.NO_TRANSITION;
+
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.CContext;
@@ -38,10 +41,15 @@ import org.graalvm.nativeimage.c.struct.CFieldAddress;
 import org.graalvm.nativeimage.c.struct.CFieldOffset;
 import org.graalvm.nativeimage.c.struct.CPointerTo;
 import org.graalvm.nativeimage.c.struct.CStruct;
+import org.graalvm.nativeimage.c.type.VoidPointer;
 import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.word.PointerBase;
 
 import com.oracle.svm.core.RegisterDumper;
+import com.oracle.svm.core.SubstrateSegfaultHandler;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.core.posix.PosixSignalHandlerSupport;
 
 // Checkstyle: stop
 
@@ -63,20 +71,21 @@ public class Signal {
     @CConstant
     public static native int SIG_SETMASK();
 
-    @CFunction
-    public static native int sigprocmask(int how, sigset_tPointer set, sigset_tPointer oldset);
+    @CConstant
+    public static native int SIGEV_SIGNAL();
 
     @CPointerTo(nameOfCType = "sigset_t")
     public interface sigset_tPointer extends PointerBase {
     }
 
+    /**
+     * WARNING: do NOT introduce direct calls to {@code signal} or {@code sigset} as they are not
+     * portable. Besides that, signal chaining (libjsig) in HotSpot would print warnings.
+     */
     public interface SignalDispatcher extends CFunctionPointer {
         @InvokeCFunctionPointer
         void dispatch(int sig);
     }
-
-    @CFunction
-    public static native SignalDispatcher signal(int signum, SignalDispatcher handler);
 
     @CConstant
     public static native SignalDispatcher SIG_DFL();
@@ -90,67 +99,309 @@ public class Signal {
     @CFunction
     public static native int raise(int signum);
 
-    @CStruct
+    @CStruct(isIncomplete = true)
     public interface siginfo_t extends PointerBase {
+        @CField
+        int si_signo();
+
+        @CField
+        int si_errno();
+
+        @CField
+        int si_code();
+
+        @CField
+        VoidPointer si_addr();
     }
 
-    @Platforms(Platform.LINUX.class)
+    @Platforms({Platform.LINUX.class, Platform.DARWIN_AARCH64.class})
     @CPointerTo(nameOfCType = "long long int")
     public interface GregsPointer extends PointerBase {
         long read(int index);
-    }
-
-    @Platforms({Platform.LINUX_AMD64.class})
-    @CEnum
-    @CContext(PosixDirectives.class)
-    public enum GregEnum {
-        REG_R8,
-        REG_R9,
-        REG_R10,
-        REG_R11,
-        REG_R12,
-        REG_R13,
-        REG_R14,
-        REG_R15,
-        REG_RDI,
-        REG_RSI,
-        REG_RBP,
-        REG_RBX,
-        REG_RDX,
-        REG_RAX,
-        REG_RCX,
-        REG_RSP,
-        REG_RIP,
-        REG_EFL,
-        REG_CSGSFS,
-        REG_ERR,
-        REG_TRAPNO,
-        REG_OLDMASK,
-        REG_CR2;
-
-        @CEnumValue
-        public native int getCValue();
     }
 
     @CStruct
     public interface ucontext_t extends RegisterDumper.Context {
         @CFieldAddress("uc_mcontext.gregs")
         @Platforms({Platform.LINUX_AMD64.class})
-        GregsPointer uc_mcontext_gregs();
+        GregsPointer uc_mcontext_linux_amd64_gregs();
 
         @CFieldAddress("uc_mcontext")
-        @Platforms({Platform.LINUX_AARCH64.class, Platform.ANDROID_AARCH64.class})
-        mcontext_t uc_mcontext();
+        @Platforms({Platform.LINUX_AARCH64_BASE.class})
+        mcontext_linux_aarch64_t uc_mcontext_linux_aarch64();
+
+        @CFieldAddress("uc_mcontext")
+        @Platforms({Platform.LINUX_RISCV64.class})
+        mcontext_linux_riscv64_t uc_mcontext_linux_riscv64();
 
         @CField("uc_mcontext")
-        @Platforms({Platform.DARWIN.class})
-        MContext64 uc_mcontext64();
+        @Platforms({Platform.DARWIN_AMD64.class})
+        AMD64DarwinMContext64 uc_mcontext_darwin_amd64();
+
+        @CField("uc_mcontext")
+        @Platforms({Platform.DARWIN_AARCH64.class})
+        AArch64DarwinMContext64 uc_mcontext_darwin_aarch64();
     }
 
-    @Platforms({Platform.DARWIN.class})
-    @CStruct(value = "__darwin_mcontext64", addStructKeyword = true)
-    public interface MContext64 extends PointerBase {
+    public interface AdvancedSignalDispatcher extends CFunctionPointer {
+        @InvokeCFunctionPointer
+        void dispatch(int signum, siginfo_t siginfo, WordPointer opaque);
+    }
 
+    @CConstant
+    public static native int SA_RESTART();
+
+    @CConstant
+    public static native int SA_SIGINFO();
+
+    @CConstant
+    public static native int SA_NODEFER();
+
+    @CStruct(addStructKeyword = true)
+    public interface sigaction extends PointerBase {
+        @CField
+        SignalDispatcher sa_handler();
+
+        @CField
+        void sa_handler(SignalDispatcher value);
+
+        @CField
+        AdvancedSignalDispatcher sa_sigaction();
+
+        @CField
+        void sa_sigaction(AdvancedSignalDispatcher value);
+
+        @CField
+        int sa_flags();
+
+        @CField
+        void sa_flags(int value);
+
+        @CFieldAddress
+        sigset_tPointer sa_mask();
+    }
+
+    @CStruct(addStructKeyword = true)
+    public interface sigevent extends PointerBase {
+        @CField
+        void sigev_notify(int value);
+
+        @CField
+        void sigev_signo(int value);
+    }
+
+    /** Don't call this function directly, use {@link PosixSignalHandlerSupport} instead. */
+    @CFunction(transition = NO_TRANSITION)
+    public static native int sigaction(int signum, sigaction act, sigaction oldact);
+
+    @CEnum
+    @CContext(PosixDirectives.class)
+    public enum SignalEnum {
+        SIGABRT,
+        SIGALRM,
+        SIGBUS,
+        SIGCHLD,
+        SIGCONT,
+        SIGFPE,
+        SIGHUP,
+        SIGILL,
+        SIGINT,
+        SIGIO,
+        SIGIOT,
+        SIGKILL,
+        SIGPIPE,
+        SIGPROF,
+        SIGQUIT,
+        SIGSEGV,
+        SIGSTOP,
+        SIGSYS,
+        SIGTERM,
+        SIGTRAP,
+        SIGTSTP,
+        SIGTTIN,
+        SIGTTOU,
+        SIGURG,
+        SIGUSR1,
+        SIGUSR2,
+        SIGVTALRM,
+        SIGWINCH,
+        SIGXCPU,
+        SIGXFSZ;
+
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+        public int getCValue() {
+            if (SubstrateUtil.HOSTED) {
+                return CConstant.ValueAccess.get(this, "getCValue0");
+            }
+            return getCValue0();
+        }
+
+        @CEnumValue
+        private native int getCValue0();
+    }
+
+    @Platforms(Platform.LINUX.class)
+    @CEnum
+    @CContext(PosixDirectives.class)
+    public enum LinuxSignalEnum {
+        SIGPOLL,
+        SIGPWR;
+
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+        public int getCValue() {
+            if (SubstrateUtil.HOSTED) {
+                return CConstant.ValueAccess.get(this, "getCValue0");
+            }
+            return getCValue0();
+        }
+
+        @CEnumValue
+        private native int getCValue0();
+    }
+
+    @Platforms(Platform.DARWIN.class)
+    @CEnum
+    @CContext(PosixDirectives.class)
+    public enum DarwinSignalEnum {
+        SIGINFO,
+        SIGEMT;
+
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+        public int getCValue() {
+            if (SubstrateUtil.HOSTED) {
+                return CConstant.ValueAccess.get(this, "getCValue0");
+            }
+            return getCValue0();
+        }
+
+        @CEnumValue
+        private native int getCValue0();
+    }
+
+    /**
+     * Used in {@link SubstrateSegfaultHandler}. So, this must not be a {@link CEnum} as this would
+     * result in machine code that needs a proper a heap base.
+     *
+     * Information about Linux's AMD64 struct sigcontext_64 uc_mcontext can be found at
+     * https://github.com/torvalds/linux/blob/9e1ff307c779ce1f0f810c7ecce3d95bbae40896/arch/x86/include/uapi/asm/sigcontext.h#L238
+     */
+    @Platforms({Platform.LINUX_AMD64.class})
+    @CContext(PosixDirectives.class)
+    public static final class GregEnumLinuxAMD64 {
+        @CConstant
+        public static native int REG_R8();
+
+        @CConstant
+        public static native int REG_R9();
+
+        @CConstant
+        public static native int REG_R10();
+
+        @CConstant
+        public static native int REG_R11();
+
+        @CConstant
+        public static native int REG_R12();
+
+        @CConstant
+        public static native int REG_R13();
+
+        @CConstant
+        public static native int REG_R14();
+
+        @CConstant
+        public static native int REG_R15();
+
+        @CConstant
+        public static native int REG_RDI();
+
+        @CConstant
+        public static native int REG_RSI();
+
+        @CConstant
+        public static native int REG_RBP();
+
+        @CConstant
+        public static native int REG_RBX();
+
+        @CConstant
+        public static native int REG_RDX();
+
+        @CConstant
+        public static native int REG_RAX();
+
+        @CConstant
+        public static native int REG_RCX();
+
+        @CConstant
+        public static native int REG_RSP();
+
+        @CConstant
+        public static native int REG_RIP();
+
+        @CConstant
+        public static native int REG_EFL();
+
+        @CConstant
+        public static native int REG_CSGSFS();
+
+        @CConstant
+        public static native int REG_ERR();
+
+        @CConstant
+        public static native int REG_TRAPNO();
+
+        @CConstant
+        public static native int REG_OLDMASK();
+
+        @CConstant
+        public static native int REG_CR2();
+    }
+
+    /**
+     * Information about Linux's AArch64 struct sigcontext uc_mcontext can be found at
+     * https://github.com/torvalds/linux/blob/9e1ff307c779ce1f0f810c7ecce3d95bbae40896/arch/arm64/include/uapi/asm/sigcontext.h#L28
+     */
+    @CStruct(value = "mcontext_t")
+    @Platforms({Platform.LINUX_AARCH64_BASE.class})
+    public interface mcontext_linux_aarch64_t extends PointerBase {
+        @CField
+        long fault_address();
+
+        @CFieldAddress
+        GregsPointer regs();
+
+        @CField
+        long sp();
+
+        @CField
+        long pc();
+
+        @CField
+        long pstate();
+    }
+
+    /**
+     * Information about Linux's RISCV64 struct sigcontext uc_mcontext can be found at
+     * https://github.com/torvalds/linux/blob/9e1ff307c779ce1f0f810c7ecce3d95bbae40896/arch/riscv/include/uapi/asm/sigcontext.h#L17
+     */
+    @CStruct(value = "mcontext_t")
+    @Platforms({Platform.LINUX_RISCV64.class})
+    public interface mcontext_linux_riscv64_t extends PointerBase {
+        @CFieldAddress(value = "__gregs")
+        GregsPointer gregs();
+    }
+
+    /**
+     * Information about Darwin's AMD64 mcontext64 can be found at
+     * https://github.com/apple/darwin-xnu/blob/2ff845c2e033bd0ff64b5b6aa6063a1f8f65aa32/bsd/i386/_mcontext.h#L147
+     *
+     * Information about _STRUCT_X86_THREAD_STATE64 can be found at
+     * https://github.com/apple/darwin-xnu/blob/2ff845c2e033bd0ff64b5b6aa6063a1f8f65aa32/osfmk/mach/i386/_structs.h#L739
+     */
+    @Platforms({Platform.DARWIN_AMD64.class})
+    @CStruct(value = "__darwin_mcontext64", addStructKeyword = true)
+    public interface AMD64DarwinMContext64 extends PointerBase {
         @CFieldOffset("__ss.__rax")
         int rax_offset();
 
@@ -206,120 +457,44 @@ public class Signal {
         int efl_offset();
     }
 
-    @CStruct
-    @Platforms({Platform.LINUX_AARCH64.class, Platform.ANDROID_AARCH64.class})
-    public interface mcontext_t extends PointerBase {
-        @CField
-        long fault_address();
-
-        @CFieldAddress
+    /**
+     * Information about Darwin's AArch64 mcontext64 can be found at
+     * https://github.com/apple/darwin-xnu/blob/2ff845c2e033bd0ff64b5b6aa6063a1f8f65aa32/bsd/arm/_mcontext.h#L70
+     *
+     * Information about _STRUCT_ARM_THREAD_STATE64 can be found at
+     * https://github.com/apple/darwin-xnu/blob/2ff845c2e033bd0ff64b5b6aa6063a1f8f65aa32/osfmk/mach/arm/_structs.h#L102
+     */
+    @Platforms({Platform.DARWIN_AARCH64.class})
+    @CStruct(value = "__darwin_mcontext64", addStructKeyword = true)
+    public interface AArch64DarwinMContext64 extends PointerBase {
+        @CFieldAddress("__ss.__x")
         GregsPointer regs();
 
-        @CField
+        @CField("__ss.__fp")
+        long fp();
+
+        @CField("__ss.__lr")
+        long lr();
+
+        @CField("__ss.__sp")
         long sp();
 
-        @CField
+        @CField("__ss.__pc")
         long pc();
-
-        @CField
-        long pstate();
     }
 
-    public interface AdvancedSignalDispatcher extends CFunctionPointer {
-        @InvokeCFunctionPointer
-        void dispatch(int signum, siginfo_t siginfo, WordPointer opaque);
+    public static class NoTransitions {
+        @CFunction(transition = NO_TRANSITION)
+        public static native int kill(int pid, int sig);
+
+        @CFunction(transition = NO_TRANSITION)
+        public static native int sigprocmask(int how, sigset_tPointer set, sigset_tPointer oldset);
+
+        @CFunction(transition = NO_TRANSITION)
+        public static native int sigemptyset(sigset_tPointer set);
+
+        @CFunction(transition = NO_TRANSITION)
+        public static native int sigaddset(sigset_tPointer set, int signum);
+
     }
-
-    @CConstant
-    public static native int SA_SIGINFO();
-
-    @CStruct(addStructKeyword = true)
-    public interface sigaction extends PointerBase {
-        @CField
-        SignalDispatcher sa_handler();
-
-        @CField
-        void sa_handler(SignalDispatcher value);
-
-        @CField
-        AdvancedSignalDispatcher sa_sigaction();
-
-        @CField
-        void sa_sigaction(AdvancedSignalDispatcher value);
-
-        @CField
-        int sa_flags();
-
-        @CField
-        void sa_flags(int value);
-
-        @CFieldAddress
-        sigset_tPointer sa_mask();
-    }
-
-    @CFunction
-    public static native int sigaction(SignalEnum signum, sigaction act, sigaction oldact);
-
-    @CEnum
-    @CContext(PosixDirectives.class)
-    public enum SignalEnum {
-        SIGABRT,
-        SIGALRM,
-        SIGBUS,
-        SIGCHLD,
-        SIGCONT,
-        SIGFPE,
-        SIGHUP,
-        SIGILL,
-        SIGINT,
-        SIGIO,
-        SIGIOT,
-        SIGKILL,
-        SIGPIPE,
-        SIGPROF,
-        SIGQUIT,
-        SIGSEGV,
-        SIGSTOP,
-        SIGSYS,
-        SIGTERM,
-        SIGTRAP,
-        SIGTSTP,
-        SIGTTIN,
-        SIGTTOU,
-        SIGURG,
-        SIGUSR1,
-        SIGUSR2,
-        SIGVTALRM,
-        SIGWINCH,
-        SIGXCPU,
-        SIGXFSZ;
-
-        @CEnumValue
-        public native int getCValue();
-    }
-
-    @Platforms(Platform.LINUX.class)
-    @CEnum
-    @CContext(PosixDirectives.class)
-    public enum LinuxSignalEnum {
-        SIGPOLL,
-        SIGPWR;
-
-        @CEnumValue
-        public native int getCValue();
-    }
-
-    @Platforms(Platform.DARWIN.class)
-    @CEnum
-    @CContext(PosixDirectives.class)
-    public enum DarwinSignalEnum {
-        SIGINFO,
-        SIGEMT;
-
-        @CEnumValue
-        public native int getCValue();
-    }
-
-    @CFunction
-    public static native int sigemptyset(sigset_tPointer set);
 }

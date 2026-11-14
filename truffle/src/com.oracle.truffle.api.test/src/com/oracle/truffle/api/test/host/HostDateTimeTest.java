@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -49,11 +49,17 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.Date;
 
 import org.graalvm.polyglot.Value;
+import org.graalvm.polyglot.proxy.ProxyDate;
+import org.graalvm.polyglot.proxy.ProxyTime;
+import org.graalvm.polyglot.proxy.ProxyTimeZone;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -145,6 +151,73 @@ public final class HostDateTimeTest extends AbstractPolyglotTest {
     }
 
     @Test
+    public void testHostOffsetDateTimeUsingValue() {
+        OffsetDateTime ov = OffsetDateTime.of(2025, 7, 14, 12, 34, 56, 789, ZoneOffset.ofHoursMinutes(5, 45));
+        Value v = context.asValue(ov);
+
+        assertTrue(v.isDate());
+        assertEquals(v.asDate(), ov.toLocalDate());
+
+        assertTrue(v.isTime());
+        assertEquals(v.asTime(), ov.toLocalTime());
+
+        assertTrue(v.isTimeZone());
+        assertEquals(v.asTimeZone(), ov.getOffset());
+
+        assertEquals(v.asInstant(), ov.toInstant());
+
+        assertTrue(v.isHostObject());
+        assertSame(ov, v.asHostObject());
+    }
+
+    @Test
+    public void testHostOffsetTimeUsingValue() {
+        OffsetTime ov = OffsetTime.of(12, 34, 56, 789, ZoneOffset.ofHoursMinutes(5, 45));
+        Value v = context.asValue(ov);
+
+        assertFalse(v.isDate());
+        assertFails(() -> v.asDate(), ClassCastException.class);
+
+        assertTrue(v.isTime());
+        assertEquals(v.asTime(), ov.toLocalTime());
+
+        assertTrue(v.isTimeZone());
+        assertEquals(v.asTimeZone(), ov.getOffset());
+
+        assertFails(() -> v.asInstant(), ClassCastException.class);
+
+        assertTrue(v.isHostObject());
+        assertSame(ov, v.asHostObject());
+    }
+
+    @Test
+    public void testGuestDateTimeAsOffsetTypes() {
+        ZonedDateTime dateTime = ZonedDateTime.of(2025, 7, 14, 12, 34, 56, 789, ZoneId.of("Europe/Berlin"));
+        Value v = context.asValue(new DateTimeProxy(dateTime));
+
+        assertEquals(dateTime.toOffsetDateTime(), v.as(OffsetDateTime.class));
+        assertEquals(dateTime.toOffsetDateTime().toOffsetTime(), v.as(OffsetTime.class));
+    }
+
+    @Test
+    public void testGuestTimeAsOffsetTime() {
+        LocalTime time = LocalTime.of(12, 34, 56, 789);
+        ZoneOffset offset = ZoneOffset.ofHoursMinutes(5, 45);
+        Value v = context.asValue(new TimeProxy(time, offset));
+
+        assertEquals(OffsetTime.of(time, offset), v.as(OffsetTime.class));
+    }
+
+    @Test
+    public void testNaiveGuestValuesAsOffsetTypes() {
+        Value dateTime = context.asValue(new NaiveDateTimeProxy(LocalDate.of(2025, 7, 14), LocalTime.NOON));
+        Value time = context.asValue(ProxyTime.from(LocalTime.NOON));
+
+        assertFails(() -> dateTime.as(OffsetDateTime.class), ClassCastException.class);
+        assertFails(() -> time.as(OffsetTime.class), ClassCastException.class);
+    }
+
+    @Test
     public void testHostDate() {
         Date ov = Date.from(Instant.now());
         Value v = context.asValue(ov);
@@ -163,6 +236,168 @@ public final class HostDateTimeTest extends AbstractPolyglotTest {
 
         assertTrue(v.isHostObject());
         assertSame(ov, v.asHostObject());
+    }
+
+    @Test
+    public void testSQLDate() {
+        java.sql.Date ov = new java.sql.Date(0);
+        Value v = context.asValue(ov);
+
+        assertTrue(v.isDate());
+        assertEquals(v.asDate(), ov.toLocalDate());
+
+        assertFalse(v.isTime());
+        assertFails(() -> v.asTime(), ClassCastException.class);
+
+        assertFalse(v.isTimeZone());
+        assertFails(() -> v.asTimeZone(), ClassCastException.class);
+
+        assertFails(() -> v.asInstant(), ClassCastException.class);
+
+        assertTrue(v.isHostObject());
+        assertSame(ov, v.asHostObject());
+    }
+
+    @Test
+    public void testSQLTime() {
+        java.sql.Time ov = new java.sql.Time(0);
+        Value v = context.asValue(ov);
+
+        assertFalse(v.isDate());
+        assertFails(() -> v.asDate(), ClassCastException.class);
+
+        assertTrue(v.isTime());
+        assertEquals(v.asTime(), ov.toLocalTime());
+
+        assertFalse(v.isTimeZone());
+        assertFails(() -> v.asTimeZone(), ClassCastException.class);
+
+        assertFails(() -> v.asInstant(), ClassCastException.class);
+
+        assertTrue(v.isHostObject());
+        assertSame(ov, v.asHostObject());
+    }
+
+    @Test
+    public void testSQLTimestamp() {
+        java.sql.Timestamp ov = new java.sql.Timestamp(0);
+        Value v = context.asValue(ov);
+        ZoneId utc = ZoneId.of("UTC");
+
+        assertTrue(v.isDate());
+        assertEquals(v.asDate(), ov.toInstant().atZone(utc).toLocalDate());
+
+        assertTrue(v.isTime());
+        assertEquals(v.asTime(), ov.toInstant().atZone(utc).toLocalTime());
+
+        assertTrue(v.isTimeZone());
+        assertEquals(v.asTimeZone(), utc);
+
+        assertEquals(v.asInstant(), ov.toInstant());
+
+        assertTrue(v.isHostObject());
+        assertSame(ov, v.asHostObject());
+    }
+
+    @Test
+    @SuppressWarnings("serial")
+    public void testCustomDateSubclass() {
+        java.util.Date ov = new java.util.Date(0) {
+            @Override
+            public Instant toInstant() {
+                return super.toInstant();
+            }
+        };
+        Value v = context.asValue(ov);
+        ZoneId utc = ZoneId.of("UTC");
+
+        assertTrue(v.isDate());
+        assertEquals(v.asDate(), ov.toInstant().atZone(utc).toLocalDate());
+
+        assertTrue(v.isTime());
+        assertEquals(v.asTime(), ov.toInstant().atZone(utc).toLocalTime());
+
+        assertTrue(v.isTimeZone());
+        assertEquals(v.asTimeZone(), utc);
+
+        assertEquals(v.asInstant(), ov.toInstant());
+
+        assertTrue(v.isHostObject());
+        assertSame(ov, v.asHostObject());
+    }
+
+    private static final class DateTimeProxy implements ProxyDate, ProxyTime, ProxyTimeZone {
+
+        private final LocalDate date;
+        private final LocalTime time;
+        private final ZoneId zone;
+
+        DateTimeProxy(ZonedDateTime dateTime) {
+            this(dateTime.toLocalDate(), dateTime.toLocalTime(), dateTime.getZone());
+        }
+
+        DateTimeProxy(LocalDate date, LocalTime time, ZoneId zone) {
+            this.date = date;
+            this.time = time;
+            this.zone = zone;
+        }
+
+        @Override
+        public LocalDate asDate() {
+            return date;
+        }
+
+        @Override
+        public LocalTime asTime() {
+            return time;
+        }
+
+        @Override
+        public ZoneId asTimeZone() {
+            return zone;
+        }
+    }
+
+    private static final class NaiveDateTimeProxy implements ProxyDate, ProxyTime {
+
+        private final LocalDate date;
+        private final LocalTime time;
+
+        NaiveDateTimeProxy(LocalDate date, LocalTime time) {
+            this.date = date;
+            this.time = time;
+        }
+
+        @Override
+        public LocalDate asDate() {
+            return date;
+        }
+
+        @Override
+        public LocalTime asTime() {
+            return time;
+        }
+    }
+
+    private static final class TimeProxy implements ProxyTime, ProxyTimeZone {
+
+        private final LocalTime time;
+        private final ZoneId zone;
+
+        TimeProxy(LocalTime time, ZoneId zone) {
+            this.time = time;
+            this.zone = zone;
+        }
+
+        @Override
+        public LocalTime asTime() {
+            return time;
+        }
+
+        @Override
+        public ZoneId asTimeZone() {
+            return zone;
+        }
     }
 
 }

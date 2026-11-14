@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,19 +35,19 @@ import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.word.SignedWord;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
-import com.oracle.svm.core.threadlocal.FastThreadLocalObject;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.guest.staging.core.threadlocal.FastThreadLocalFactory;
+import com.oracle.svm.guest.staging.core.threadlocal.FastThreadLocalObject;
 import com.oracle.svm.truffle.nfi.NativeAPI.TruffleContextHandle;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import org.graalvm.word.impl.Word;
 
 public abstract class TruffleNFISupport {
 
     static final Charset UTF8 = Charset.forName("utf8");
 
-    private static final FastThreadLocalObject<LocalNativeScope> currentScope = FastThreadLocalFactory.createObject(LocalNativeScope.class);
+    private static final FastThreadLocalObject<LocalNativeScope> currentScope = FastThreadLocalFactory.createObject(LocalNativeScope.class, "TruffleNFISupport.currentScope");
 
     private final ObjectHandles globalHandles;
     private final ObjectHandles closureHandles;
@@ -112,12 +112,12 @@ public abstract class TruffleNFISupport {
         closureHandles.destroy((ObjectHandle) handle);
     }
 
-    public TruffleContextHandle createContextHandle(Target_com_oracle_truffle_nfi_impl_NFIContext context) {
+    public TruffleContextHandle createContextHandle(Target_com_oracle_truffle_nfi_backend_libffi_LibFFIContext context) {
         return (TruffleContextHandle) contextHandles.create(context);
     }
 
-    public Target_com_oracle_truffle_nfi_impl_NFIContext resolveContextHandle(TruffleContextHandle handle) {
-        return (Target_com_oracle_truffle_nfi_impl_NFIContext) contextHandles.get((ObjectHandle) handle);
+    public Target_com_oracle_truffle_nfi_backend_libffi_LibFFIContext resolveContextHandle(TruffleContextHandle handle) {
+        return (Target_com_oracle_truffle_nfi_backend_libffi_LibFFIContext) contextHandles.get((ObjectHandle) handle);
     }
 
     public void destroyContextHandle(TruffleContextHandle handle) {
@@ -126,7 +126,7 @@ public abstract class TruffleNFISupport {
 
     @TruffleBoundary
     public static String utf8ToJavaString(CCharPointer str) {
-        if (str.equal(WordFactory.zero())) {
+        if (str.equal(Word.zero())) {
             return null;
         } else {
             UnsignedWord len = SubstrateUtil.strlen(str);
@@ -205,9 +205,9 @@ public abstract class TruffleNFISupport {
         return truffleNFISupport.lookupImpl(nativeContext, library, name);
     }
 
-    protected static Target_com_oracle_truffle_nfi_impl_NFIContext getContext(long nativeContext) {
+    protected static Target_com_oracle_truffle_nfi_backend_libffi_LibFFIContext getContext(long nativeContext) {
         TruffleNFISupport truffleNFISupport = ImageSingletons.lookup(TruffleNFISupport.class);
-        NativeAPI.NativeTruffleContext ctx = WordFactory.pointer(nativeContext);
+        NativeAPI.NativeTruffleContext ctx = Word.pointer(nativeContext);
         return truffleNFISupport.resolveContextHandle(ctx.contextHandle());
     }
 }

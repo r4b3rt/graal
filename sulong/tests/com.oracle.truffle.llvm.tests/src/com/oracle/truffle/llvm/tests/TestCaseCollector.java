@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -39,8 +39,8 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.function.Predicate;
@@ -103,12 +103,23 @@ public final class TestCaseCollector {
     public static Collection<Object[]> collectTestCases(Class<?> testSuiteClass, Path suitesPath, Predicate<? super Path> predicate) {
         try {
             // collect excludes
-            Map<String, String> excludedTests = getExcludedTests(testSuiteClass);
+            ExcludeMap excludedTests = getExcludedTests(testSuiteClass);
             // walk test cases
-            return Files.walk(suitesPath).filter(predicate).map(Path::getParent).map(testPath -> {
-                String testCaseName = getTestCaseName(suitesPath, testPath);
+            Stream<Object[]> stream = Files.walk(suitesPath).filter(predicate).map(Path::getParent).map(testPath -> {
+                String testCaseName = getTestCaseName(suitesPath, testPath).replace("\\", "/");
                 return new Object[]{testPath, testCaseName, excludedTests.get(testCaseName)};
-            }).collect(Collectors.toList());
+            });
+            if (TestOptions.TEST_NAME_FILTER != null && !TestOptions.TEST_NAME_FILTER.isEmpty()) {
+                stream = stream.filter(arr -> {
+                    String testCaseName = (String) arr[1];
+                    return testCaseName.contains(TestOptions.TEST_NAME_FILTER);
+                });
+            }
+            List<Object[]> list = stream.collect(Collectors.toList());
+            if (!list.isEmpty()) {
+                return list;
+            }
+            throw new AssertionError("No test cases not found in: " + suitesPath);
         } catch (IOException e) {
             throw new AssertionError("Test cases not found", e);
         }
@@ -129,10 +140,53 @@ public final class TestCaseCollector {
         return suitesPath.relativize(testPath).toString();
     }
 
+    public abstract static class ExcludeMap {
+        public abstract String get(String key);
+    }
+
+    private static final class EmptyExcludeMap extends ExcludeMap {
+        private static final EmptyExcludeMap EMPTY = new EmptyExcludeMap();
+
+        @Override
+        public String get(String key) {
+            return null;
+        }
+    }
+
+    private static final class ExcludeAllMap extends ExcludeMap {
+
+        private static final String EXCLUDE_ALL_PATTERN = "*";
+
+        private final String reason;
+
+        private ExcludeAllMap(String reason) {
+            this.reason = reason;
+        }
+
+        @Override
+        public String get(String key) {
+            return reason;
+        }
+    }
+
+    private static final class MapBasedExcludeMap extends ExcludeMap {
+
+        private final Map<String, String> map;
+
+        private MapBasedExcludeMap(Map<String, String> map) {
+            this.map = map;
+        }
+
+        @Override
+        public String get(String key) {
+            return map.get(key);
+        }
+    }
+
     /**
      * Returns a map from excluded test to the exclude file that caused the exclusion.
      */
-    public static Map<String, String> getExcludedTests(Class<?> testSuiteClass) {
+    public static ExcludeMap getExcludedTests(Class<?> testSuiteClass) {
         try {
             FileVisitors visitors = new FileVisitors();
 
@@ -145,16 +199,21 @@ public final class TestCaseCollector {
             // walk <ROOT><testSuiteClass>/os_arch/
             walkOsArch(visitors, osArchDirectory);
 
-            Path configExcludeDirectory = configDirectory.resolve(TestEngineConfig.getInstance().getName());
+            Path configExcludeDirectory = configDirectory.resolve(TestEngineConfig.getInstance().getConfigFolderName());
             Path configOsArchDirectory = configExcludeDirectory.resolve("os_arch");
             // walk <ROOT><testSuiteClass>/"runtimeConfig"/<LLVMRuntimeConfig>/, skip "os_arch"
             walkFileTreeIfExists(configExcludeDirectory, visitors.skippingVisitor(configOsArchDirectory));
             // walk <ROOT><testSuiteClass>/"runtimeConfig"/<LLVMRuntimeConfig>/os_arch/
             walkOsArch(visitors, configOsArchDirectory);
 
-            return visitors.getExcludeMap();
+            Map<String, String> excludeMap = visitors.getExcludeMap();
+            String excludeAllReason = excludeMap.get(ExcludeAllMap.EXCLUDE_ALL_PATTERN);
+            if (excludeAllReason != null) {
+                return new ExcludeAllMap(excludeAllReason);
+            }
+            return new MapBasedExcludeMap(excludeMap);
         } catch (IOException e) {
-            return Collections.emptyMap();
+            return EmptyExcludeMap.EMPTY;
         }
     }
 
@@ -210,7 +269,7 @@ public final class TestCaseCollector {
             @Override
             public FileVisitResult visitFile(Path path, BasicFileAttributes attrs) throws IOException {
                 if (path.toString().endsWith(".exclude")) {
-                    // add all entries in the exclude file the the map
+                    // add all entries in the exclude file the map
                     String excludeFile = Paths.get(TestOptions.CONFIG_ROOT).relativize(path).toString();
                     readAllLines(path).forEach(excludeTest -> {
                         String oldReason = excludeTestToFile.get(excludeTest);

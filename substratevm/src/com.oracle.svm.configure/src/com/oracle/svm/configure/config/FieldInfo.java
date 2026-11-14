@@ -24,34 +24,65 @@
  */
 package com.oracle.svm.configure.config;
 
-final class FieldInfo {
-    private static final FieldInfo[] WITHOUT_UNSAFE_ACCESS_CACHE;
+import com.oracle.svm.configure.config.ConfigurationMemberInfo.ConfigurationMemberAccessibility;
+import com.oracle.svm.configure.config.ConfigurationMemberInfo.ConfigurationMemberDeclaration;
+
+public final class FieldInfo {
+    private static final FieldInfo[][] FINAL_NOT_WRITABLE_CACHE;
     static {
-        ConfigurationMemberKind[] values = ConfigurationMemberKind.values();
-        WITHOUT_UNSAFE_ACCESS_CACHE = new FieldInfo[values.length];
-        for (ConfigurationMemberKind value : values) {
-            WITHOUT_UNSAFE_ACCESS_CACHE[value.ordinal()] = new FieldInfo(value, false, false);
+        ConfigurationMemberDeclaration[] declarations = ConfigurationMemberDeclaration.values();
+        ConfigurationMemberAccessibility[] accessibilities = ConfigurationMemberAccessibility.values();
+        FINAL_NOT_WRITABLE_CACHE = new FieldInfo[declarations.length][accessibilities.length];
+        for (ConfigurationMemberDeclaration declaration : declarations) {
+            for (ConfigurationMemberAccessibility accessibility : accessibilities) {
+                FINAL_NOT_WRITABLE_CACHE[declaration.ordinal()][accessibility.ordinal()] = new FieldInfo(declaration, accessibility, false);
+            }
         }
     }
 
-    static FieldInfo get(ConfigurationMemberKind kind, boolean finalButWritable, boolean allowUnsafeAccess) {
-        if (finalButWritable || allowUnsafeAccess) { // assumed to be rare
-            return new FieldInfo(kind, finalButWritable, allowUnsafeAccess);
-        }
-        return WITHOUT_UNSAFE_ACCESS_CACHE[kind.ordinal()];
+    static FieldInfo get(ConfigurationMemberInfo kind, boolean finalButWritable) {
+        return get(kind.getDeclaration(), kind.getAccessibility(), finalButWritable);
     }
 
-    private final ConfigurationMemberKind kind;
+    static FieldInfo get(ConfigurationMemberDeclaration declaration, ConfigurationMemberAccessibility accessibility, boolean finalButWritable) {
+        if (finalButWritable) { // assumed to be rare
+            return new FieldInfo(declaration, accessibility, finalButWritable);
+        }
+        return FINAL_NOT_WRITABLE_CACHE[declaration.ordinal()][accessibility.ordinal()];
+    }
+
+    private final ConfigurationMemberInfo kind;
     private final boolean finalButWritable;
-    private final boolean allowUnsafeAccess;
 
-    private FieldInfo(ConfigurationMemberKind kind, boolean finalButWritable, boolean allowUnsafeAccess) {
-        this.kind = kind;
+    private FieldInfo(ConfigurationMemberDeclaration declaration, ConfigurationMemberAccessibility accessibility, boolean finalButWritable) {
+        this.kind = ConfigurationMemberInfo.get(declaration, accessibility);
         this.finalButWritable = finalButWritable;
-        this.allowUnsafeAccess = allowUnsafeAccess;
     }
 
-    public ConfigurationMemberKind getKind() {
+    public FieldInfo newMergedWith(FieldInfo other) {
+        assert kind.equals(other.kind);
+        if (finalButWritable == other.finalButWritable) {
+            return this;
+        }
+        return get(kind, finalButWritable || other.finalButWritable);
+    }
+
+    public FieldInfo newWithDifferencesFrom(FieldInfo other) {
+        assert kind.equals(other.kind);
+        boolean newFinalButWritable = finalButWritable && !other.finalButWritable;
+        if (!newFinalButWritable) {
+            return null;
+        }
+        return get(kind, newFinalButWritable);
+    }
+
+    public FieldInfo newIntersectedWith(FieldInfo other) {
+        assert kind.equals(other.kind);
+        boolean newFinalButWritable = finalButWritable && other.finalButWritable;
+        return get(kind, newFinalButWritable);
+    }
+
+    public ConfigurationMemberInfo getKind() {
         return kind;
     }
 
@@ -59,21 +90,17 @@ final class FieldInfo {
         return finalButWritable;
     }
 
-    public boolean isUnsafeAccessible() {
-        return allowUnsafeAccess;
-    }
-
     @Override
     public boolean equals(Object obj) {
         if (obj != this && obj instanceof FieldInfo) {
             FieldInfo other = (FieldInfo) obj;
-            return kind.equals(other.kind) && finalButWritable == other.finalButWritable && allowUnsafeAccess == other.allowUnsafeAccess;
+            return kind.equals(other.kind) && finalButWritable == other.finalButWritable;
         }
         return (obj == this);
     }
 
     @Override
     public int hashCode() {
-        return (Boolean.hashCode(allowUnsafeAccess) * 31 + Boolean.hashCode(finalButWritable)) * 31 + kind.hashCode();
+        return Boolean.hashCode(finalButWritable) * 31 + kind.hashCode();
     }
 }

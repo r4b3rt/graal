@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,9 +27,10 @@ package com.oracle.svm.truffle.nfi;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 
-import com.oracle.svm.core.threadlocal.FastThreadLocalBytes;
-import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
+import com.oracle.svm.guest.staging.core.threadlocal.FastThreadLocalBytes;
+import com.oracle.svm.guest.staging.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.InvalidArrayIndexException;
@@ -37,19 +38,20 @@ import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnknownIdentifierException;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
-import com.oracle.truffle.api.profiles.BranchProfile;
+import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 
 @ExportLibrary(InteropLibrary.class)
 @SuppressWarnings("static-method")
 public final class ErrnoMirror implements TruffleObject {
 
-    static final FastThreadLocalBytes<CIntPointer> errnoMirror = FastThreadLocalFactory.createBytes(() -> SizeOf.get(CIntPointer.class));
+    static final FastThreadLocalBytes<CIntPointer> errnoMirror = FastThreadLocalFactory.createBytes(() -> SizeOf.get(CIntPointer.class), "ErrnoMirror.errnoMirror");
 
     private static final KeysArray KEYS = new KeysArray(new String[]{"bind"});
 
     @ExportMessage
     Object execute(@SuppressWarnings("unused") Object[] args) {
-        return new Target_com_oracle_truffle_nfi_impl_NativePointer(errnoMirror.getAddress().rawValue());
+        return new Target_com_oracle_truffle_nfi_backend_libffi_NativePointer(errnoMirror.getAddress().rawValue());
     }
 
     @ExportMessage
@@ -107,9 +109,10 @@ public final class ErrnoMirror implements TruffleObject {
 
         @ExportMessage
         String readArrayElement(long idx,
-                        @Cached BranchProfile exception) throws InvalidArrayIndexException {
+                        @Bind Node node,
+                        @Cached InlinedBranchProfile exception) throws InvalidArrayIndexException {
             if (!isArrayElementReadable(idx)) {
-                exception.enter();
+                exception.enter(node);
                 throw InvalidArrayIndexException.create(idx);
             }
             return keys[(int) idx];

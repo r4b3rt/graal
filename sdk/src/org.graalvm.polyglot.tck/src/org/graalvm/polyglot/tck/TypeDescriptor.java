@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -54,6 +54,7 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+
 import org.graalvm.polyglot.Value;
 
 /**
@@ -144,7 +145,7 @@ public final class TypeDescriptor {
      * content type.
      *
      * @see #isAssignable(org.graalvm.polyglot.tck.TypeDescriptor).
-     * @see Value#hasMembers().
+     * @see Value#hasArrayElements().
      * @since 0.30
      */
     public static final TypeDescriptor ARRAY;
@@ -171,6 +172,7 @@ public final class TypeDescriptor {
     /**
      * Type descriptor for date.
      *
+     * @see Value#isDate().
      * @since 20.0
      */
     public static final TypeDescriptor DATE = new TypeDescriptor(new PrimitiveImpl(PrimitiveKind.DATE));
@@ -178,6 +180,7 @@ public final class TypeDescriptor {
     /**
      * Type descriptor for time.
      *
+     * @see Value#isTime().
      * @since 20.0
      */
     public static final TypeDescriptor TIME = new TypeDescriptor(new PrimitiveImpl(PrimitiveKind.TIME));
@@ -185,6 +188,7 @@ public final class TypeDescriptor {
     /**
      * Type descriptor for time zone.
      *
+     * @see Value#isTimeZone().
      * @since 20.0
      */
     public static final TypeDescriptor TIME_ZONE = new TypeDescriptor(new PrimitiveImpl(PrimitiveKind.TIME_ZONE));
@@ -192,6 +196,7 @@ public final class TypeDescriptor {
     /**
      * Type descriptor for duration.
      *
+     * @see Value#isDuration().
      * @since 20.0
      */
     public static final TypeDescriptor DURATION = new TypeDescriptor(new PrimitiveImpl(PrimitiveKind.DURATION));
@@ -199,13 +204,15 @@ public final class TypeDescriptor {
     /**
      * Type descriptor for metaobjects.
      *
+     * @see Value#isMetaObject().
      * @since 20.0
      */
     public static final TypeDescriptor META_OBJECT = new TypeDescriptor(new PrimitiveImpl(PrimitiveKind.META_OBJECT));
 
     /**
-     * Type descriptor for duration.
+     * Type descriptor for exception.
      *
+     * @see Value#isException()
      * @since 19.3
      */
     public static final TypeDescriptor EXCEPTION = new TypeDescriptor(new PrimitiveImpl(PrimitiveKind.EXCEPTION));
@@ -219,8 +226,16 @@ public final class TypeDescriptor {
      *
      * <p>
      * The JavaScript sample usage for no argument function constructor:
-     * {@codesnippet LanguageProviderSnippets#TypeDescriptorSnippets#createValueConstructors}
-     * <p>
+     * 
+     * <pre>
+     * &#64;Override
+     * public Collection&lt;? extends Snippet&gt; createValueConstructors(Context context) {
+     *     return Collections.singleton(Snippet.newBuilder(
+     *                     "function",
+     *                     context.eval("js", "(function(){ return function(){}})"),
+     *                     TypeDescriptor.EXECUTABLE).build());
+     * }
+     * </pre>
      *
      * @see Value#canExecute().
      * @since 0.30
@@ -235,10 +250,39 @@ public final class TypeDescriptor {
      * . This type can be used for specifying expressions or statements parameter types when the
      * passed executable is actually not invoked.
      *
-     * <p>
-     * The JavaScript sample usage for plus operator:
-     * {@codesnippet LanguageProviderSnippets#JsSnippets#createExpressions}
-     * <p>
+     * <pre>
+     * &#64;Override
+     * public Collection&lt;? extends Snippet&gt; createExpressions(Context context) {
+     *     final Collection&lt;Snippet&gt; expressions = new ArrayList&lt;&gt;();
+     *     final TypeDescriptor numeric = TypeDescriptor.union(
+     *                     TypeDescriptor.NUMBER,
+     *                     TypeDescriptor.BOOLEAN);
+     *     final TypeDescriptor nonNumeric = TypeDescriptor.union(
+     *                     TypeDescriptor.STRING,
+     *                     TypeDescriptor.OBJECT,
+     *                     TypeDescriptor.ARRAY,
+     *                     TypeDescriptor.EXECUTABLE_ANY);
+     *     Snippet.Builder builder = Snippet.newBuilder(
+     *                     "+",
+     *                     context.eval("js",
+     *                                     "(function (a, b){ return a + b;})"),
+     *                     TypeDescriptor.NUMBER).parameterTypes(numeric, numeric);
+     *     expressions.add(builder.build());
+     *     builder = Snippet.newBuilder(
+     *                     "+",
+     *                     context.eval("js",
+     *                                     "(function (a, b){ return a + b;})"),
+     *                     TypeDescriptor.STRING).parameterTypes(nonNumeric, TypeDescriptor.ANY);
+     *     expressions.add(builder.build());
+     *     builder = Snippet.newBuilder(
+     *                     "+",
+     *                     context.eval("js",
+     *                                     "(function (a, b){ return a + b;})"),
+     *                     TypeDescriptor.STRING).parameterTypes(TypeDescriptor.ANY, nonNumeric);
+     *     expressions.add(builder.build());
+     *     return expressions;
+     * }
+     * </pre>
      *
      * @see TypeDescriptor#EXECUTABLE
      * @since 19.0
@@ -273,18 +317,29 @@ public final class TypeDescriptor {
     public static final TypeDescriptor INSTANTIABLE_ANY = new TypeDescriptor(new InstantiableImpl(ExecutableImpl.Kind.TOP, null, true, Collections.emptyList()));
 
     /**
-     * Represents all types. It's an intersection of no type.
+     * Represents any type. It's a union of all types.
      *
      * @since 0.30
      */
     public static final TypeDescriptor ANY = new TypeDescriptor(new UnionImpl(new HashSet<>(Arrays.asList(
-                    NOTYPE.impl, NULL.impl, BOOLEAN.impl, NUMBER.impl, STRING.impl, HOST_OBJECT.impl, NATIVE_POINTER.impl, OBJECT.impl, ARRAY.impl, EXECUTABLE_ANY.impl, INSTANTIABLE_ANY.impl,
-                    DATE.impl, TIME.impl, TIME_ZONE.impl, DURATION.impl, META_OBJECT.impl, ITERABLE.impl, ITERATOR.impl, EXCEPTION.impl, HASH.impl))));
+                    NOTYPE.impl, NULL.impl, BOOLEAN.impl, NUMBER.impl, STRING.impl, HOST_OBJECT.impl, NATIVE_POINTER.impl, OBJECT.impl, ARRAY.impl,
+                    DATE.impl, TIME.impl, TIME_ZONE.impl, DURATION.impl, META_OBJECT.impl, ITERABLE.impl, ITERATOR.impl, EXCEPTION.impl, HASH.impl,
+                    EXECUTABLE_ANY.impl, INSTANTIABLE_ANY.impl))));
+
+    /**
+     * Represents all types. It's an intersection of all types.
+     *
+     * @since 24.2
+     */
+    public static final TypeDescriptor ALL = new TypeDescriptor(intersectionImpl(Arrays.asList(
+                    NOTYPE.impl, NULL.impl, BOOLEAN.impl, NUMBER.impl, STRING.impl, HOST_OBJECT.impl, NATIVE_POINTER.impl, OBJECT.impl, ARRAY.impl,
+                    DATE.impl, TIME.impl, TIME_ZONE.impl, DURATION.impl, META_OBJECT.impl, ITERABLE.impl, ITERATOR.impl, EXCEPTION.impl, HASH.impl,
+                    EXECUTABLE.impl, INSTANTIABLE.impl)));
 
     private static final TypeDescriptor[] PREDEFINED_TYPES = new TypeDescriptor[]{
-                    NOTYPE, NULL, BOOLEAN, NUMBER, STRING, HOST_OBJECT, DATE, TIME, TIME_ZONE, DURATION, META_OBJECT, EXCEPTION, NATIVE_POINTER, OBJECT, ARRAY, EXECUTABLE, EXECUTABLE_ANY,
-                    INSTANTIABLE, ITERABLE, ITERATOR, HASH,
-                    INSTANTIABLE_ANY, ANY
+                    NOTYPE, NULL, BOOLEAN, NUMBER, STRING, HOST_OBJECT, NATIVE_POINTER, OBJECT, ARRAY,
+                    DATE, TIME, TIME_ZONE, DURATION, META_OBJECT, ITERABLE, ITERATOR, EXCEPTION, HASH,
+                    EXECUTABLE_ANY, EXECUTABLE, INSTANTIABLE_ANY, INSTANTIABLE, ANY, ALL
     };
 
     private final TypeDescriptorImpl impl;
@@ -619,6 +674,109 @@ public final class TypeDescriptor {
     }
 
     /**
+     * Creates a new type by removing the given type from this type. The type subtraction works in
+     * the following way:
+     * <ul>
+     * <li>If this type and the {@code toRemove} type represent the same types then no type is
+     * returned.</li>
+     * <li>If this type represents a {@link #isUnion() union} type the {@code toRemove} type is
+     * removed from the union type. When the {@code toRemove} type is also a union type then all
+     * types in the {@code toRemove} union type are removed.</li>
+     * <li>If this type represents an {@link #isIntersection() intersection} type the
+     * {@code toRemove} type is removed from the intersection type. When the {@code toRemove} type
+     * is also an intersection type then all types in the {@code toRemove} intersection type are
+     * removed.</li>
+     * <li>If this and {@code toRemove} types are parameterized types (array, iterable, iterator,
+     * hash) of the same kind the type parameter types are subtracted applying the same rules.</li>
+     * </ul>
+     * <p>
+     * Examples:
+     * <ul>
+     * <li>NUMBER.subtract(NUMBER) -> no type</li>
+     * <li>NUMBER.subtract(STRING) -> NUMBER</li>
+     * <li>UNION[NUMBER|STRING|OBJECT].subtract(NUMBER) -> UNION[STRING|OBJECT]</li>
+     * <li>UNION[NUMBER|STRING|OBJECT].subtract(UNION[NUMBER|STRING]) -> OBJECT</li>
+     * <li>INTERSECTION[NUMBER&amp;STRING&amp;OBJECT].subtract(NUMBER) ->
+     * INTERSECTION[STRING&amp;OBJECT]</li>
+     * <li>INTERSECTION[NUMBER&amp;STRING&amp;OBJECT].subtract(INTERSECTION[NUMBER&amp;STRING]) ->
+     * OBJECT</li>
+     * <li>ARRAY[UNION[NUMBER|STRING]].subtract(ARRAY[NUMBER]) -> ARRAY[STRING]</li>
+     * <li>ARRAY[INTERSECTION[NUMBER|STRING]].subtract(ARRAY[NUMBER]) -> ARRAY[STRING]</li>
+     * </ul>
+     * 
+     * @param toRemove the type to remove.
+     * @since 20.2
+     */
+    public TypeDescriptor subtract(TypeDescriptor toRemove) {
+        TypeDescriptorImpl res = subtractImpl(impl, toRemove.impl);
+        TypeDescriptor result = isPredefined(res);
+        return result != null ? result : new TypeDescriptor(res);
+    }
+
+    private static TypeDescriptorImpl subtractImpl(TypeDescriptorImpl originalType, TypeDescriptorImpl toRemove) {
+        if (CompositeTypeDescriptorImpl.class.isAssignableFrom(originalType.getClass())) {
+            Set<TypeDescriptorImpl> originalTypes = ((CompositeTypeDescriptorImpl) originalType).types;
+            Set<TypeDescriptorImpl> toRemoveTypes = originalType.getClass() == toRemove.getClass() ? ((CompositeTypeDescriptorImpl) toRemove).types : Collections.singleton(toRemove);
+            return ((CompositeTypeDescriptorImpl) originalType).create(subtractImpl(originalTypes, toRemoveTypes));
+        } else {
+            Set<TypeDescriptorImpl> reduced = subtractImpl(Collections.singleton(originalType), Collections.singleton(toRemove));
+            return reduced.isEmpty() ? NOTYPE.impl : reduced.iterator().next();
+        }
+    }
+
+    private static Set<TypeDescriptorImpl> subtractImpl(Set<TypeDescriptorImpl> originalTypes, Set<TypeDescriptorImpl> toRemove) {
+        Set<TypeDescriptorImpl> result = new HashSet<>(originalTypes);
+        Set<TypeDescriptorImpl> todo = new HashSet<>(toRemove);
+        // 1. Remove simple non parameterized non composite types
+        for (Iterator<TypeDescriptorImpl> it = todo.iterator(); it.hasNext();) {
+            if (result.remove(it.next())) {
+                it.remove();
+            }
+        }
+        if (todo.isEmpty()) {
+            return result;
+        }
+        // 2. Reduce composite and parameterized types
+        Map<Class<? extends TypeDescriptorImpl>, TypeDescriptorImpl> originalTypesByClz = new HashMap<>();
+        for (TypeDescriptorImpl td : result) {
+            originalTypesByClz.put(td.getClass(), td);
+        }
+        Map<Class<? extends TypeDescriptorImpl>, TypeDescriptorImpl> toRemoveByClz = new HashMap<>();
+        for (TypeDescriptorImpl td : todo) {
+            toRemoveByClz.put(td.getClass(), td);
+        }
+        for (Map.Entry<Class<? extends TypeDescriptorImpl>, TypeDescriptorImpl> typeDescriptorToRemove : toRemoveByClz.entrySet()) {
+            TypeDescriptorImpl typeDescriptorToReduce = originalTypesByClz.get(typeDescriptorToRemove.getKey());
+            if (typeDescriptorToReduce != null) {
+                if (ParameterizedTypeDescriptorImpl.class.isAssignableFrom(typeDescriptorToRemove.getKey())) {
+                    result.remove(typeDescriptorToReduce);
+                    result.add(subtractParameterized((ParameterizedTypeDescriptorImpl) typeDescriptorToReduce,
+                                    (ParameterizedTypeDescriptorImpl) typeDescriptorToRemove.getValue()));
+                } else if (CompositeTypeDescriptorImpl.class.isAssignableFrom(typeDescriptorToRemove.getKey())) {
+                    result.remove(typeDescriptorToReduce);
+                    result.add(subtractComposite((CompositeTypeDescriptorImpl) typeDescriptorToReduce,
+                                    (CompositeTypeDescriptorImpl) typeDescriptorToRemove.getValue()));
+                }
+            }
+        }
+        return result;
+    }
+
+    private static TypeDescriptorImpl subtractParameterized(ParameterizedTypeDescriptorImpl originalType, ParameterizedTypeDescriptorImpl toRemove) {
+        assert originalType.typeParameters.size() == toRemove.typeParameters.size() : "Incompatible parameterized types " + originalType + "," + toRemove;
+        List<TypeDescriptorImpl> reducedTypeParameters = new ArrayList<>();
+        for (int i = 0; i < originalType.typeParameters.size(); i++) {
+            reducedTypeParameters.add(subtractImpl(originalType.typeParameters.get(i), toRemove.typeParameters.get(i)));
+        }
+        return originalType.create(reducedTypeParameters);
+    }
+
+    private static TypeDescriptorImpl subtractComposite(CompositeTypeDescriptorImpl originalType, CompositeTypeDescriptorImpl toRemove) {
+        Set<TypeDescriptorImpl> reduced = subtractImpl(originalType.types, toRemove.types);
+        return originalType.create(reduced);
+    }
+
+    /**
      * Creates a new array type with given component type. To create a multi-dimensional array use
      * an array type as a component type.
      *
@@ -840,9 +998,7 @@ public final class TypeDescriptor {
         }
         switch (contentTypes.size()) {
             case 0:
-                return intersection(NOTYPE, NULL, BOOLEAN, NUMBER, STRING, HOST_OBJECT, NATIVE_POINTER, OBJECT,
-                                ARRAY, EXECUTABLE, INSTANTIABLE, ITERABLE, ITERATOR, DATE, TIME, TIME_ZONE, DURATION,
-                                META_OBJECT, EXCEPTION, HASH);
+                return ALL;
             case 1:
                 return contentTypes.iterator().next();
             default:
@@ -1223,7 +1379,7 @@ public final class TypeDescriptor {
                 if (typeParameter == null) {
                     sb.append("<any>");
                 } else {
-                    sb.append(typeParameter.toString());
+                    sb.append(typeParameter);
                 }
             }
             sb.append(">");
@@ -1338,11 +1494,21 @@ public final class TypeDescriptor {
         }
     }
 
-    private static final class IntersectionImpl extends TypeDescriptorImpl {
-        private final Set<TypeDescriptorImpl> types;
+    private abstract static class CompositeTypeDescriptorImpl extends TypeDescriptorImpl {
+
+        final Set<TypeDescriptorImpl> types;
+
+        CompositeTypeDescriptorImpl(Set<TypeDescriptorImpl> types) {
+            this.types = Collections.unmodifiableSet(types);
+        }
+
+        abstract TypeDescriptorImpl create(Set<TypeDescriptorImpl> subTypes);
+    }
+
+    private static final class IntersectionImpl extends CompositeTypeDescriptorImpl {
 
         IntersectionImpl(Set<TypeDescriptorImpl> types) {
-            this.types = Collections.unmodifiableSet(types);
+            super(types);
         }
 
         @Override
@@ -1414,6 +1580,26 @@ public final class TypeDescriptor {
         }
 
         @Override
+        TypeDescriptorImpl create(Set<TypeDescriptorImpl> subTypes) {
+            switch (subTypes.size()) {
+                case 0:
+                    return NOTYPE.impl;
+                case 1:
+                    return subTypes.iterator().next();
+                default:
+                    Set<TypeDescriptorImpl> useSubTypes = new HashSet<>();
+                    for (TypeDescriptorImpl subType : subTypes) {
+                        if (subType.getClass() == IntersectionImpl.class) {
+                            useSubTypes.addAll(((IntersectionImpl) subType).types);
+                        } else {
+                            useSubTypes.add(subType);
+                        }
+                    }
+                    return new IntersectionImpl(useSubTypes);
+            }
+        }
+
+        @Override
         public int hashCode() {
             return types.hashCode();
         }
@@ -1431,15 +1617,17 @@ public final class TypeDescriptor {
 
         @Override
         public String toString() {
+            if (this == ALL.impl) {
+                return "<all>";
+            }
             return types.isEmpty() ? "<none>" : types.stream().map(Object::toString).collect(Collectors.joining(" & ", "[", "]"));
         }
     }
 
-    private static final class UnionImpl extends TypeDescriptorImpl {
-        private final Set<TypeDescriptorImpl> types;
+    private static final class UnionImpl extends CompositeTypeDescriptorImpl {
 
         private UnionImpl(Set<TypeDescriptorImpl> types) {
-            this.types = Collections.unmodifiableSet(types);
+            super(types);
         }
 
         @Override
@@ -1496,6 +1684,26 @@ public final class TypeDescriptor {
         }
 
         @Override
+        TypeDescriptorImpl create(Set<TypeDescriptorImpl> subTypes) {
+            switch (subTypes.size()) {
+                case 0:
+                    return NOTYPE.impl;
+                case 1:
+                    return subTypes.iterator().next();
+                default:
+                    Set<TypeDescriptorImpl> useSubTypes = new HashSet<>();
+                    for (TypeDescriptorImpl subType : subTypes) {
+                        if (subType.getClass() == UnionImpl.class) {
+                            useSubTypes.addAll(((UnionImpl) subType).types);
+                        } else {
+                            useSubTypes.add(subType);
+                        }
+                    }
+                    return new UnionImpl(subTypes);
+            }
+        }
+
+        @Override
         public int hashCode() {
             return types.hashCode();
         }
@@ -1513,6 +1721,9 @@ public final class TypeDescriptor {
 
         @Override
         public String toString() {
+            if (this == ANY.impl) {
+                return "<any>";
+            }
             return types.stream().map(Object::toString).collect(Collectors.joining(" | ", "[", "]"));
         }
     }

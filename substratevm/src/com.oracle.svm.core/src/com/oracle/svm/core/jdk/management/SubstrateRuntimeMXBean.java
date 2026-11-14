@@ -24,7 +24,6 @@
  */
 package com.oracle.svm.core.jdk.management;
 
-//Checkstyle: stop
 import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
 import java.net.InetAddress;
@@ -38,38 +37,35 @@ import java.util.Set;
 
 import javax.management.ObjectName;
 
-import org.graalvm.compiler.serviceprovider.GraalServices;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.ProcessProperties;
 
-import com.oracle.svm.core.JavaMainWrapper;
-import com.oracle.svm.core.jdk.RuntimeSupport;
-import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.core.Isolates;
+import com.oracle.svm.guest.staging.JavaMainSupport;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.RuntimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
 import sun.management.Util;
-//Checkstyle: resume
 
-final class SubstrateRuntimeMXBean implements RuntimeMXBean {
+@SingletonTraits(access = RuntimeAccessOnly.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = InitialLayerOnly.class)
+public final class SubstrateRuntimeMXBean implements RuntimeMXBean {
 
-    private static final String MSG = "RuntimeMXBean methods";
-
-    private long startMillis;
+    private final String managementSpecVersion;
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    SubstrateRuntimeMXBean() {
-        RuntimeSupport.getRuntimeSupport().addInitializationHook(this::initialize);
-    }
-
-    void initialize() {
-        startMillis = System.currentTimeMillis();
+    public SubstrateRuntimeMXBean() {
+        managementSpecVersion = ManagementFactory.getRuntimeMXBean().getManagementSpecVersion();
     }
 
     @Override
     public List<String> getInputArguments() {
-        if (ImageSingletons.contains(JavaMainWrapper.JavaMainSupport.class)) {
-            return ImageSingletons.lookup(JavaMainWrapper.JavaMainSupport.class).getInputArguments();
+        if (ImageSingletons.contains(JavaMainSupport.class)) {
+            return ImageSingletons.lookup(JavaMainSupport.class).getInputArguments();
         }
         return Collections.emptyList();
     }
@@ -79,59 +75,53 @@ final class SubstrateRuntimeMXBean implements RuntimeMXBean {
         return Util.newObjectName(ManagementFactory.RUNTIME_MXBEAN_NAME);
     }
 
-    @SuppressWarnings("deprecation")
     @Override
     public String getName() {
-        long id;
-        String hostName;
-        try {
-            id = ProcessProperties.getProcessID();
-        } catch (Throwable t) {
-            id = GraalServices.getGlobalTimeStamp();
-        }
+        long pid = ProcessProperties.getProcessID();
+        String hostName = "localhost";
         try {
             hostName = InetAddress.getLocalHost().getHostName();
         } catch (UnknownHostException e) {
-            hostName = "localhost";
+            // ignore
         }
-        return id + "@" + hostName;
+        return pid + "@" + hostName;
     }
 
     /* All remaining methods are unsupported on Substrate VM. */
 
     @Override
     public String getVmName() {
-        throw VMError.unsupportedFeature(MSG);
+        return System.getProperty("java.vm.name");
     }
 
     @Override
     public String getVmVendor() {
-        throw VMError.unsupportedFeature(MSG);
+        return System.getProperty("java.vm.vendor");
     }
 
     @Override
     public String getVmVersion() {
-        throw VMError.unsupportedFeature(MSG);
+        return System.getProperty("java.vm.version");
     }
 
     @Override
     public String getSpecName() {
-        throw VMError.unsupportedFeature(MSG);
+        return System.getProperty("java.vm.specification.name");
     }
 
     @Override
     public String getSpecVendor() {
-        throw VMError.unsupportedFeature(MSG);
+        return System.getProperty("java.vm.specification.vendor");
     }
 
     @Override
     public String getSpecVersion() {
-        throw VMError.unsupportedFeature(MSG);
+        return System.getProperty("java.vm.specification.version");
     }
 
     @Override
     public String getManagementSpecVersion() {
-        throw VMError.unsupportedFeature(MSG);
+        return managementSpecVersion;
     }
 
     @Override
@@ -141,28 +131,28 @@ final class SubstrateRuntimeMXBean implements RuntimeMXBean {
 
     @Override
     public String getLibraryPath() {
-        throw VMError.unsupportedFeature(MSG);
+        return System.getProperty("java.vm.library.path");
     }
 
     @Override
     public boolean isBootClassPathSupported() {
-        throw VMError.unsupportedFeature(MSG);
+        return false;
     }
 
     @Override
     public String getBootClassPath() {
-        throw VMError.unsupportedFeature(MSG);
+        throw new UnsupportedOperationException("The boot class path mechanism is not supported.");
     }
 
     @Override
     public long getUptime() {
-        return System.currentTimeMillis() - startMillis;
+        return Isolates.getUptimeMillis();
     }
 
     @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public long getStartTime() {
-        assert startMillis > 0 : "SubstrateRuntimeMXBean.getStartTime: Should have set SubstrateRuntimeMXBean.startMillis.";
-        return startMillis;
+        return Isolates.getInitDoneTimeMillis();
     }
 
     /** Copied from {@code sun.management.RuntimeImpl#getSystemProperties()}. */
